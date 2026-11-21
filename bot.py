@@ -21,7 +21,22 @@ from array import array
 import mechfight as mf
 
 TAU = 2 * math.pi
+
+# ---- experiment knobs (change one per submission) ----
+VERSION = "v3"
 WEAPON_RANK = {"laser": 3, "lightning": 2, "mortar": 1, "gun": 0}
+RETREAT_HP = 0.40        # disengage below this HP fraction when losing
+BOOST_STRAFE = True      # burst-boost sideways in fights to dodge bullets
+SILENT_ROAM = True       # walk under 5 m/s (no footstep sound) when idle after the first minute
+HEAL_HP = 0.85           # below this with no enemy in sight: stop farming so out-of-combat regen kicks in
+EARLY_LOOT_RANGE = 300.0 # how far to go for a first weapon early on
+HOLD_WHEN_OUTNUMBERED = True  # 2+ enemies close: fight from cover so they come one at a time
+FIGHT_RANGE = 95.0       # preferred range with gun/laser
+UPGRADE_SCORE = {"plating": 12, "nanites": 10, "armor": 9, "laser_damage": 8, "laser_charge": 8,
+                 "gun_rate": 7, "gun_damage": 7, "lightning_efficiency": 7, "gyros": 6,
+                 "lightning_range": 6, "gun_mag": 6, "reactor": 5, "sensors": 5, "gun_velocity": 5,
+                 "mortar_reload": 5, "lightning_chain": 4, "capacitor": 4, "servos": 4,
+                 "mortar_splash": 4, "jets": 3, "mortar_velocity": 3, "laser_pierce": 3}
 
 
 def wrap(a):
@@ -376,7 +391,7 @@ class Nav:
 
 # --------------------------------------------------------------------------- bot
 class Bot:
-    name = "kt-mech-v1"
+    name = "kt-mech-" + VERSION
 
     def __init__(self, hello):
         cfg = hello.get("config", {})
@@ -412,6 +427,8 @@ class Bot:
         self.roam_goal = None
         self.scan_phase = 0.0
         self.seen = {}  # enemy id -> (t, mech dict)
+        self.known_pickups = {}  # id -> (kind, pos, expires)
+        self.known_cubes = {}    # id -> (pos, expires)
 
     # ------------------------------------------------------------- helpers
     def zone_now(self, z, t):
@@ -482,12 +499,7 @@ class Bot:
     def pick_upgrade(self, offer, have):
         def score(ch):
             cid = ch["id"]
-            base = {"plating": 10, "armor": 10, "nanites": 9, "laser_damage": 8, "laser_charge": 8,
-                    "gun_rate": 7, "gun_damage": 7, "gyros": 6, "lightning_efficiency": 7,
-                    "lightning_range": 6, "lightning_chain": 4, "gun_mag": 6, "reactor": 5,
-                    "sensors": 5, "capacitor": 4, "servos": 4, "gun_velocity": 5, "jets": 3,
-                    "mortar_reload": 5, "mortar_splash": 4, "mortar_velocity": 3, "laser_pierce": 3}
-            s = base.get(cid, 3)
+            s = UPGRADE_SCORE.get(cid, 3)
             req = self.upgrades.get(cid, {}).get("requires")
             if req and req not in have:
                 s -= 5
@@ -524,7 +536,16 @@ class Bot:
             elif et == "hit":
                 self.last_dealt = t
             elif et == "take_failed":
-                self.bad_pickups.add(e.get("id"))
+                if e.get("reason") == "gone":
+                    self.known_pickups.pop(e.get("id"), None)
+                else:
+                    self.bad_pickups.add(e.get("id"))
+            elif et == "took":
+                self.known_pickups.pop(e.get("id"), None)
+            elif et == "kill":
+                s = self.seen.get(e.get("target"))
+                if s:
+                    self.known_cubes[("kill", e.get("target"))] = (s[1]["pos"], t + 25)
         for s in obs.get("sounds", []):
             if s.get("kind") in ("gun", "laser", "laser_charge", "lightning", "mortar", "step", "boost", "jet") \
                     and s.get("dist") in ("near", "mid"):
@@ -539,6 +560,7 @@ class Bot:
         mechs = [m for m in obs.get("mechs", []) if m.get("kind") == "mech" and m.get("id") != me.get("id")]
         for m in mechs:
             self.seen[m["id"]] = (t, m)
+        self.update_memory(obs, x, y, eye_z, t)
 
         def dist(p):
             return math.hypot(p[0] - x, p[1] - y)
@@ -566,22 +588,29 @@ class Bot:
             if done or t > self.retreat_until:
                 self.mode = "roam"
         if self.mode != "retreat" and target is not None:
-            losing = hpf < 0.35 and (t_hpf > hpf + 0.1 or outnumbered)
+            losing = hpf < RETREAT_HP and (t_hpf > hpf + 0.1 or outnumbered)
             if losing and t_hpf > 0.2:
                 self.mode = "retreat"
                 self.retreat_until = t + 12
                 self.cover = None
         if self.mode != "retreat":
-            self.mode = "fight" if target is not None else "roam"
+            if target is None:
+                self.mode = "roam"
+            elif HOLD_WHEN_OUTNUMBERED and outnumbered and not (len(close_threats) == 2 and min(
+                    m.get("hp", 1400) / max(1, m.get("max_hp", 1400)) for m in close_threats) < 0.2):
+                self.mode = "hold"
+            else:
+                self.mode = "fight"
         # regen needs 5 s without dealing OR taking damage: if we're being hit anyway, shooting back is free
         cornered = self.mode == "retreat" and target is not None and (tdist < 35 or t - self.last_damaged < 2.5)
+        healing = self.mode == "roam" and hpf < HEAL_HP
 
         # ---------------- movement
         move = (0.0, 0.0)
         boost = False
         jump = False
         if self.mode == "fight":
-            want = 30.0 if "lightning" in kinds else 95.0
+            want = 30.0 if "lightning" in kinds else FIGHT_RANGE
             if t_light:
                 want = max(want, 60.0)
             if t_hpf < 0.25:
@@ -600,6 +629,8 @@ class Bot:
                 radial = clamp((tdist - want) / 25.0, -1.0, 1.0)
                 mx, my = rx * radial * 0.8 + tx_, ry * radial * 0.8 + ty_
                 move = unit(mx, my)
+                if BOOST_STRAFE and "lightning" not in kinds and energy > 55 and tdist > 40:
+                    boost = True
             else:
                 # no line: close in along a path if healthy, else hold and wait at cover
                 if hpf > 0.6:
@@ -611,6 +642,34 @@ class Bot:
                     move = (tx_, ty_)
                     boost = True
             label = f"fight {target['id']} d{tdist:.0f}"
+        elif self.mode == "hold":
+            cxs = sum(m["pos"][0] for m in close_threats) / len(close_threats)
+            cys = sum(m["pos"][1] for m in close_threats) / len(close_threats)
+            czs = max(m["pos"][2] for m in close_threats)
+            stale = self.cover is None or t - self.cover_t > 1.0
+            if not stale and self.map.los(cxs, cys, czs + 8, self.cover[0], self.cover[1],
+                                         self.map.ground(*self.cover) + 5.0):
+                stale = True
+            if stale:
+                c = self.find_cover(x, y, cxs, cys, czs + 8, zone, t)
+                if c is not None or self.cover is None:
+                    self.cover = c
+                self.cover_t = t
+            if self.cover and math.hypot(self.cover[0] - x, self.cover[1] - y) > 3:
+                move = self.nav.dir_to(x, y, self.cover[0], self.cover[1], t)
+            elif self.cover is None:
+                # no cover nearby: strafe around the group, backing off if they're close
+                if t >= self.strafe_until:
+                    self.strafe = -self.strafe if random.random() < 0.7 else self.strafe
+                    self.strafe_until = t + random.uniform(0.5, 1.4)
+                bx, by = unit(x - cxs, y - cys)
+                sx_, sy_ = -by * self.strafe, bx * self.strafe
+                back = 0.8 if tdist < 70 else 0.0
+                move = unit(sx_ + bx * back, sy_ + by * back)
+                boost = BOOST_STRAFE and energy > 55 and "lightning" not in kinds
+            else:
+                move = (0.0, 0.0)  # in cover: let them come around the corner one at a time
+            label = f"hold x{len(close_threats)}"
         elif self.mode == "retreat":
             ref = target or (self.seen.get(self.last_attacker, (0, None))[1])
             if ref is not None:
@@ -625,10 +684,15 @@ class Bot:
                 boost = energy > 35 and tdist < 120
             label = "retreat"
         else:
-            goal, why = self.loot_goal(obs, x, y, z, kinds, zone, t)
+            goal, why = self.loot_goal(obs, x, y, z, kinds, zone, t, max_d=50.0 if healing else None)
+            if goal is None and healing:
+                goal, why = (x, y), "heal"
             if goal is None:
                 goal, why = self.roam(x, y, zone, t), "roam"
             move = self.nav.dir_to(x, y, goal[0], goal[1], t)
+            if SILENT_ROAM and why == "roam" and t > 60 and zgoal is None:
+                sp = 4.6 / max(1.0, walk)  # just under the 5 m/s step-sound threshold
+                move = (move[0] * sp, move[1] * sp)
             label = why
 
         # the zone overrides everything except a point-blank fight
@@ -663,8 +727,8 @@ class Bot:
         if shoot_target is None or (self.mode == "retreat" and not cornered and t_hpf > 0.2):
             shoot_target = None
         aim_obj = target  # what the torso faces (front armor)
-        if shoot_target is None and self.mode != "retreat":
-            aim_obj = self.farm_target(obs, x, y, eye_z)
+        if shoot_target is None and self.mode != "retreat" and not healing:
+            aim_obj = self.farm_target(obs, x, y, eye_z, need_weapon=len(kinds) < 2)
         if aim_obj is not None:
             tp = aim_obj["pos"]
             is_mech = aim_obj.get("kind") == "mech"
@@ -717,7 +781,8 @@ class Bot:
                             aim = [aim[0], clamp(pch, -0.7, 1.3)]
                             if abs(cur_pitch - aim[1]) < 0.05 and yaw_err < tol * 2:
                                 fire[mi] = True
-            if gun and gun.get("ammo", 1) == 0 and gun.get("reload", 0) == 0:
+            if gun and gun.get("reload", 0) == 0 and (gun.get("ammo", 1) == 0 or (
+                    not clear and gun.get("ammo", 12) < gun["stats"].get("mag", 12) * 0.5)):
                 act["reload"] = True
         else:
             # nothing to shoot: look where trouble came from, else sweep
@@ -785,9 +850,16 @@ class Bot:
                 return p["id"], 1
         return None
 
-    def farm_target(self, obs, x, y, eye_z):
+    def farm_target(self, obs, x, y, eye_z, need_weapon=False):
         """Something to shoot when no mech is around: NPC drones, then crates."""
         best, bs = None, 1e18
+        if need_weapon:
+            for c in obs.get("crates", []):
+                d = math.hypot(c["pos"][0] - x, c["pos"][1] - y)
+                if d < 140 and d < bs and self.map.los(x, y, eye_z, c["pos"][0], c["pos"][1], c["pos"][2] + 1.2):
+                    best, bs = dict(c, kind="crate"), d
+            if best:
+                return best
         for n in obs.get("mechs", []):
             if n.get("kind") != "npc":
                 continue
@@ -802,38 +874,63 @@ class Bot:
                 best, bs = dict(c, kind="crate"), d
         return best
 
-    def loot_goal(self, obs, x, y, z, kinds, zone, t):
+    def update_memory(self, obs, x, y, eye_z, t):
+        vis_p = {p["id"] for p in obs.get("pickups", [])}
+        vis_c = {c["id"] for c in obs.get("cubes", [])}
+        for p in obs.get("pickups", []):
+            self.known_pickups[p["id"]] = (p["kind"], p["pos"], t + 150)
+        for c in obs.get("cubes", []):
+            self.known_cubes[c["id"]] = (c["pos"], t + 60)
+        near = self.vision_near - 8
+        for pid, (k, pos, exp) in list(self.known_pickups.items()):
+            d = math.hypot(pos[0] - x, pos[1] - y)
+            if t > exp or (pid not in vis_p and d < near and self.map.los(x, y, eye_z, pos[0], pos[1], pos[2] + 0.5)):
+                del self.known_pickups[pid]
+        for cid, (pos, exp) in list(self.known_cubes.items()):
+            d = math.hypot(pos[0] - x, pos[1] - y)
+            fake = isinstance(cid, tuple)
+            if t > exp or (fake and d < 6) or (not fake and cid not in vis_c and d < near
+                                                 and self.map.los(x, y, eye_z, pos[0], pos[1], pos[2] + 0.5)):
+                del self.known_cubes[cid]
+
+    def loot_goal(self, obs, x, y, z, kinds, zone, t, max_d=None):
         best, bs, why = None, 1e18, ""
         slot_rank = max([WEAPON_RANK[k] for k in kinds if k != "gun"], default=-1)
-        for p in obs.get("pickups", []):
-            if p["id"] in self.bad_pickups or p["kind"] == "gun" or p["kind"] in kinds:
+        wrange = EARLY_LOOT_RANGE if (slot_rank < 0 and t < 120) else 160.0
+        if max_d is not None:
+            wrange = min(wrange, max_d)
+        for pid, (kind, pos, _) in self.known_pickups.items():
+            if pid in self.bad_pickups or kind == "gun" or kind in kinds:
                 continue
-            if WEAPON_RANK.get(p["kind"], 0) <= slot_rank:
+            r = WEAPON_RANK.get(kind, 0)
+            if r <= slot_rank:
                 continue
-            if p["pos"][2] - self.map.ground(p["pos"][0], p["pos"][1]) > 3:
-                continue  # rooftop loot: skip in v1
-            d = math.hypot(p["pos"][0] - x, p["pos"][1] - y)
-            s = d * 0.6
-            if d < 160 and s < bs and self.point_safe(p["pos"][0], p["pos"][1], zone, t):
-                best, bs, why = p["pos"], s, f"get {p['kind']}"
-        for c in obs.get("cubes", []):
-            d = math.hypot(c["pos"][0] - x, c["pos"][1] - y)
-            if d < 120 and d * 0.5 < bs and self.point_safe(c["pos"][0], c["pos"][1], zone, t):
-                best, bs, why = c["pos"], d * 0.5, "cube"
-        for dr in obs.get("drops", []):
-            d = math.hypot(dr["pos"][0] - x, dr["pos"][1] - y)
-            eta = d / 11.0
-            if d < 260 and eta + 3 > dr.get("lands_in", 0) and (dr.get("holder") in (None,) or d < 30):
-                s = d * 0.7
-                if s < bs:
-                    best, bs, why = dr["pos"], s, "drop"
-        # chase a drone into gun range (we stay ~60 m out)
-        if best is None:
-            for n in obs.get("mechs", []):
-                if n.get("kind") == "npc":
-                    d = math.hypot(n["pos"][0] - x, n["pos"][1] - y)
-                    if 90 < d < 200 and d < bs:
-                        best, bs, why = n["pos"], d, "drone"
+            if pos[2] - self.map.ground(pos[0], pos[1]) > 3:
+                continue  # rooftop loot: skip
+            d = math.hypot(pos[0] - x, pos[1] - y)
+            s = d * (0.25 if slot_rank < 0 else 0.5) * (0.8 if r >= 3 else 1.0)
+            if d < wrange and s < bs and self.point_safe(pos[0], pos[1], zone, t):
+                best, bs, why = pos, s, f"get {kind}"
+        crange = 120.0 if max_d is None else max_d
+        for cid, (pos, _) in self.known_cubes.items():
+            d = math.hypot(pos[0] - x, pos[1] - y)
+            if d < crange and d * 0.5 < bs and self.point_safe(pos[0], pos[1], zone, t):
+                best, bs, why = pos, d * 0.5, "cube"
+        if max_d is None:
+            for dr in obs.get("drops", []):
+                d = math.hypot(dr["pos"][0] - x, dr["pos"][1] - y)
+                eta = d / 11.0
+                if d < 260 and eta + 3 > dr.get("lands_in", 0) and (dr.get("holder") is None or d < 30):
+                    s = d * 0.7
+                    if s < bs:
+                        best, bs, why = dr["pos"], s, "drop"
+            # chase a drone into gun range (we stay ~60 m out)
+            if best is None:
+                for n in obs.get("mechs", []):
+                    if n.get("kind") == "npc":
+                        d = math.hypot(n["pos"][0] - x, n["pos"][1] - y)
+                        if 90 < d < 200 and d < bs:
+                            best, bs, why = n["pos"], d, "drone"
         return (best[:2] if best else None), why
 
     def roam(self, x, y, zone, t):
