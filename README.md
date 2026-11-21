@@ -16,3 +16,19 @@ Python 3.13, standard library only. `bot.py` is the bot; `mechfight.py` is the k
 
 ## Local check
     python3 check/check.py -- python3 -u bot.py        # from the kit folder, pointing at this bot.py
+
+## Local practice simulator
+
+Download and unpack the official [Mech Royale kit](https://www.joinbuilders.org/buildathon/tracks/builders/files/mechfight-kit.tar.gz) here so `mechfight-kit/` sits next to `bot.py`.
+
+```sh
+python3 -B sim/sim.py --matches 100
+python3 -B sim/sim.py --seed 0 --verbose
+python3 -B sim/sim.py --bot mechfight-kit/python/example_bot.py --matches 100
+python3 -B -m unittest sim.test_sim
+python3 mechfight-kit/check/check.py -- python3 -u bot.py
+```
+
+The benchmark reads the kit's arena and recorded configuration. A batch uses seeds 0–99 in order, with `--matches` taking a prefix. The simulator reports placement points, kills, cause of death, damage, mode share, and timings as JSON. `--verbose` writes one match timeline to stderr. Stuck time means a movement command above half speed with less than 2 m of displacement over the previous 1–1.2 seconds.
+
+The simulation uses ground-only motion, the bot's 2 m map, sampled canopy and shot geometry, and a modeled house squad. These approximations affect comparisons involving rooftops, jumps, foliage, and cover edges. A* uses a fixed expansion budget in the simulator so runs use the same paths across machines.

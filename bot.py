@@ -57,6 +57,7 @@ class GridMap:
     """2 m grid over the arena: ground height, building/stadium/bridge solids, walkability."""
 
     C = 2.0
+    expansion_limit = None
 
     def __init__(self, mdir, files, step_up=1.2, max_slope_deg=50.0):
         self.ok = False
@@ -304,6 +305,7 @@ class GridMap:
         best, besth = s, h0
         t0 = time.perf_counter()
         n = 0
+        expansion_limit = self.expansion_limit
         pop, push, pc = heapq.heappop, heapq.heappush, time.perf_counter
         while openh:
             _, gc, c = pop(openh)
@@ -313,7 +315,10 @@ class GridMap:
                 best = c
                 break
             n += 1
-            if (n & 127) == 0 and pc() - t0 > budget_s:
+            if expansion_limit is not None:
+                if n >= expansion_limit:
+                    break
+            elif (n & 127) == 0 and pc() - t0 > budget_s:
                 break
             ci = c % W
             for off, cost, o1, o2 in nb:

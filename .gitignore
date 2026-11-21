@@ -1,0 +1,4 @@
+/mechfight-kit/
+/logs/
+*.log
+__pycache__/
