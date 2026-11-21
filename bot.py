@@ -690,7 +690,7 @@ class Bot:
             label = "retreat"
         else:
             goal, why = self.loot_goal(obs, x, y, z, kinds, zone, t, max_d=50.0 if healing else None)
-            if goal is None and healing:
+            if goal is None and healing and t - self.last_damaged >= 2.5:
                 goal, why = (x, y), "heal"
             if goal is None:
                 goal, why = self.roam(x, y, zone, t), "roam"
