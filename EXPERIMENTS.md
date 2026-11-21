@@ -65,7 +65,12 @@ Scores show the overall mean, paired delta, and paired lenient/strict deltas. FF
 
 ## Coordinated-squad trials from cand11
 
-- C1. Firing a charged laser as soon as the torso will align, or releasing a lethal partial charge, will finish isolated enemies before they can answer.
-- C2. Taking a small safe detour to collect kill cubes before re-engaging will turn early kills into health, damage, and upgrades.
-- C3. Closing decisively on a wounded isolated mech while our gun or laser is ready will convert more trades into kills.
-- C4. Cover that blocks the squad centroid can leave an enemy flank open, so hold positions should block each dangerous line of fire.
+Practice entries show mean and lenient / strict mean. Dashes indicate a skipped stage.
+
+| Trial | Hypothesis | Change | Tuning | Validation | FFA | Predicted real | Max act p99 | Decision |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| C1 | Firing a charged laser as soon as the torso will align, or releasing a lethal partial charge, will finish isolated enemies before they can answer. | Release lethal partial laser charges and account for one tick of torso slew. | 6.055 (6.70 / 5.41) | 6.640 (7.82 / 5.46) | 9.705 | 3.758 | 9.73 ms | Diagnostic tag only |
+| C2 | Taking a small safe detour to collect kill cubes before re-engaging will turn early kills into health, damage, and upgrades. | Detour to reachable cubes from a recent kill while the next enemy is far away. | 5.955 (6.84 / 5.07) | 6.500 (7.77 / 5.23) | — | 3.698 | 8.57 ms | Reverted at validation screen |
+| C3 | Closing decisively on a wounded isolated mech while our gun or laser is ready will convert more trades into kills. | Close with a wounded isolated target when our weapon is ready. | 5.980 (6.72 / 5.24) | — | — | — | 8.44 ms | Reverted at tuning |
+| C4 | Cover that blocks the squad centroid can leave an enemy flank open, so hold positions should block each dangerous line of fire. | Choose hold cover that blocks sight from each close enemy. | 5.985 (6.66 / 5.31) | 6.335 (7.54 / 5.13) | — | 3.627 | 8.37 ms | Reverted at validation screen |
+| C5 | When both weapons are unavailable, moving behind nearby cover will reduce damage during reloads and preserve health for the next firing window. | Seek reachable cover while the gun, laser, and lightning are all unavailable. | 6.130 (7.11 / 5.15) | 6.335 (7.64 / 5.03) | — | 3.627 | 13.66 ms | Reverted at validation screen |

@@ -69,7 +69,7 @@ def evaluate(pool, batches, settings, *, progress=False):
 
 
 def paired_delta(before, after, band=None):
-    if before["seeds"] != after["seeds"]:
+    if tuple(before["seeds"]) != tuple(after["seeds"]):
         raise ValueError("paired summaries must use the same seeds in the same order")
     return statistics.mean(b - a for seed, a, b in zip(
         before["seeds"], before["points_by_seed"], after["points_by_seed"], strict=True)
@@ -89,7 +89,7 @@ def decision(before, after, settings=None):
     p99 = max(summary["act_p99_ms"] for summary in after.values())
     slope = (settings or {}).get("linear_fit", {}).get("a", 1.0)
     real_gain = slope * delta["validation"]
-    keep = (delta["tuning"] > 0 and real_gain >= 0.30 - 1e-9 and delta["ffa"] >= -0.30 and p99 < 15
+    keep = (slope > 0 and delta["tuning"] > 0 and real_gain >= 0.30 - 1e-9 and delta["ffa"] >= -0.30 and p99 < 15
             and all(d >= -0.20 for bands in band_deltas.values() for d in bands.values()))
     return dict(keep=keep, predicted_real_gain=real_gain, delta=delta, band_deltas=band_deltas, max_act_p99_ms=p99)
 

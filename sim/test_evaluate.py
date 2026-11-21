@@ -31,6 +31,8 @@ class EvaluationTest(unittest.TestCase):
         updated["validation"]["points_by_seed"][:60] = [6] * 60
         updated["ffa"]["points_by_seed"][:60] = [4] * 60
         self.assertTrue(evaluate.decision(outer, updated)["keep"])
+        reloaded = dict(updated["tuning"], seeds=list(updated["tuning"]["seeds"]))
+        self.assertEqual(evaluate.paired_delta(outer["tuning"], reloaded), 0.25)
         self.assertFalse(evaluate.decision(outer, updated, {"linear_fit": {"a": 0.5, "b": 2}})["keep"])
         updated["ffa"]["points_by_seed"][60] = 4
         self.assertFalse(evaluate.decision(outer, updated)["keep"])
