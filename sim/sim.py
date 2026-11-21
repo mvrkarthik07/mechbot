@@ -792,8 +792,8 @@ class Match:
             short = target.kind == "mech" and "laser" in target.kinds
             if short:
                 target.short_until = self.t + st["short_s"]
-                if target.charging:
-                    target.charging.charge_start, target.charging.release = None, False
+                if charging := target.charging:
+                    charging.charge_start, charging.release = None, False
             self.hit(m, target, "lightning", damage, path[-2], "short" if short else None)
             struck.add(target)
             origin = target.pos

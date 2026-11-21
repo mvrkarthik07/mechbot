@@ -64,6 +64,21 @@ class SimulatorTest(unittest.TestCase):
         match.triggers(p)
         self.assertEqual(gun.ammo, p.weapon_stats["gun"]["mag"])
 
+    def test_lightning_cancels_laser_charge(self):
+        match = self.match()
+        p = match.player
+        opponent = match.house[0]
+        opponent.weapons[1] = laser = match.new_weapon("laser")
+        laser.charge_start = 0
+        opponent.pos = (p.pos[0] + 10, *p.pos[1:])
+        p.aim = (0, 0)
+        config = p.weapon_stats["lightning"]
+        with patch.object(match, "targets", side_effect=lambda owner: iter([opponent])):
+            with patch.object(match.grid, "los", return_value=True):
+                match.lightning(p, config, p.center, (1, 0, 0), config["damage"])
+        self.assertIsNone(laser.charge_start)
+        self.assertEqual(opponent.short_until, config["short_s"])
+
     def test_visibility_memory(self):
         match = self.match()
         match.living = match.mechs.copy()
