@@ -97,6 +97,20 @@ class SimulatorTest(unittest.TestCase):
         self.assertIsNone(laser.charge_start)
         self.assertEqual(opponent.short_until, config["short_s"])
 
+    def test_bot_dodges_incoming_round_but_ignores_outgoing_round(self):
+        match = self.match()
+        match.living = match.mechs.copy()
+        p = match.player
+        x, y, z = p.pos
+        obs = match.observation(match.zone())
+        shot = dict(id=1, kind="gun", pos=[x + 80, y, z + 4], vel=[-200, 0, 0])
+        obs["projectiles"] = [shot]
+        with patch.object(match.grid, "walk_clear", return_value=True):
+            move, _ = match.bot.dodge_rounds(obs, (0, 0), False)
+            self.assertGreater(abs(move[1]), 0.5)
+            shot["vel"][0] *= -1
+            self.assertEqual(match.bot.dodge_rounds(obs, (0, 0), False), ((0, 0), False))
+
     def test_visibility_memory(self):
         match = self.match()
         match.living = match.mechs.copy()

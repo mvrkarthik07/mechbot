@@ -707,6 +707,9 @@ class Bot:
                 boost = boost or (zurgent and energy > 20)
                 label = "zone" + ("!" if zurgent else "")
 
+        if me.get("grounded") and not zurgent and t - self.last_damaged < 5:
+            move, boost = self.dodge_rounds(obs, move, boost)
+
         # stuck: jump and jet over whatever is in the way, then sidestep
         self.hist.append((t, x, y))
         while self.hist and t - self.hist[0][0] > 1.2:
@@ -821,6 +824,63 @@ class Bot:
         act["fire"] = fire
         mf.draw.label(f"{label} hp{hp:.0f}")
         return act
+
+    def dodge_rounds(self, obs, move, boost):
+        me = obs["self"]
+        st = me["stats"]
+        x, y, z = me["pos"]
+        vx, vy, _ = me["vel"]
+        radius = st["radius"] + self.cfg["projectile"]["gun_radius"]
+        threats = []
+        for q in obs.get("projectiles", []):
+            if q["kind"] not in ("gun", "npc"):
+                continue
+            px, py, pz = q["pos"]
+            qx, qy, qz = q["vel"]
+            dx, dy = px - x, py - y
+            ux, uy = qx - vx, qy - vy
+            along = ux * ux + uy * uy
+            if along < 1:
+                continue
+            eta = -(dx * ux + dy * uy) / along
+            if not 0.07 < eta < 0.65 or not z - radius <= pz + qz * eta <= z + st["height"] + radius:
+                continue
+            if math.hypot(dx + ux * eta, dy + uy * eta) < radius + st["boost_speed"] * eta:
+                speed = math.hypot(qx, qy)
+                if speed > 1:
+                    threats.append((eta, dx + qx * eta, dy + qy * eta, -qy / speed, qx / speed))
+        if not threats:
+            return move, boost
+
+        charging = any(w and w.get("charge", 0) > 0 for w in me["weapons"])
+        speed_mult = st["charge_move_mult"] if charging else 1
+        def risk(mx, my, fast):
+            speed = st["boost_speed"] if fast else st["walk_speed"]
+            ux, uy = mx * speed * speed_mult - vx, my * speed * speed_mult - vy
+            ramp = math.hypot(ux, uy) / st["ground_accel"]
+            trouble = 0
+            for eta, dx, dy, nx, ny in threats:
+                offset = eta - ramp / 2 if eta >= ramp else eta * eta / (2 * ramp)
+                miss = abs((dx - vx * eta - ux * offset) * nx + (dy - vy * eta - uy * offset) * ny)
+                trouble += max(0, radius + 0.5 - miss)
+            return trouble
+
+        score = risk(*move, boost)
+        if score <= 0.25:
+            return move, boost
+        # shortcut: project straight rounds over a short horizon, model shell arcs if they matter.
+        direction = math.atan2(move[1], move[0]) if math.hypot(*move) > 0.1 else math.atan2(vy, vx)
+        best = move, boost
+        can_boost = me["energy"] > st["boost_drain"] * 0.6 and not charging
+        for delta in (0, -0.8, 0.8, -1.6, 1.6, -2.4, 2.4, math.pi):
+            mx, my = math.cos(direction + delta), math.sin(direction + delta)
+            if not self.map.walk_clear(x, y, x + mx * 6, y + my * 6):
+                continue
+            for fast in (False, True) if can_boost else (boost,):
+                value = risk(mx, my, fast) + 0.15 + abs(delta) * 0.11 + (0.15 if fast and not boost else 0)
+                if value < score:
+                    score, best = value, ((mx, my), fast)
+        return best
 
     # ------------------------------------------------------------- sub-behaviours
     def find_cover(self, x, y, ex, ey, ez, zone, t):
