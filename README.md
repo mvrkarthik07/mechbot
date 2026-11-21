@@ -14,9 +14,6 @@ Python 3.13, standard library only. `bot.py` is the bot; `mechfight.py` is the k
 - **Loot:** weapons, cubes, supply drops, farms NPC drones and crates when no enemy is around.
 - **Upgrades:** plating/armor/regen first, then weapon upgrades for the weapons it holds.
 
-## Local check
-    python3 check/check.py -- python3 -u bot.py        # from the kit folder, pointing at this bot.py
-
 ## Local practice simulator
 
 Download and unpack the official [Mech Royale kit](https://www.joinbuilders.org/buildathon/tracks/builders/files/mechfight-kit.tar.gz) here so `mechfight-kit/` sits next to `bot.py`.
