@@ -172,3 +172,21 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(match.observation(zone)["events"], [])
         self.assertEqual(match.observation(zone, other_bot)["events"][-1]["by"], attacker.id)
         self.assertEqual(match.observation(zone, other_bot)["events"], [])
+
+    def test_bot_moves_toward_cover_when_hit_while_healing(self):
+        match = self.match()
+        match.living = match.mechs.copy()
+        player = match.player
+        obs = match.observation(match.zone())
+        obs["self"]["hp"] = player.hp * 0.65
+        obs["mechs"] = []
+        obs["events"] = [dict(type="damaged", amount=45, weapon="gun", bearing=0, by=1)]
+        x, y, _ = player.pos
+        cover = (x, y + 20)
+        with (patch.object(match.bot, "zone_goal", return_value=(None, False)),
+              patch.object(match.bot, "loot_goal", return_value=(None, "")),
+              patch.object(match.bot, "find_cover", return_value=cover) as find,
+              patch.object(match.bot.nav, "dir_to", return_value=(0, 1)) as nav):
+            self.assertEqual(match.bot.act(obs)["move"], [0, 1])
+            find.assert_called_once()
+            nav.assert_called_once_with(x, y, *cover, 0)

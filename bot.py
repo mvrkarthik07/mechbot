@@ -690,8 +690,17 @@ class Bot:
             label = "retreat"
         else:
             goal, why = self.loot_goal(obs, x, y, z, kinds, zone, t, max_d=50.0 if healing else None)
-            if goal is None and healing and t - self.last_damaged >= 2.5:
-                goal, why = (x, y), "heal"
+            if goal is None and healing:
+                if t - self.last_damaged >= 2.5:
+                    goal, why = (x, y), "heal"
+                elif self.dmg_bearing is not None:
+                    if t - self.cover_t > 1.0:
+                        ex = x + math.cos(self.dmg_bearing) * self.vision_near
+                        ey = y + math.sin(self.dmg_bearing) * self.vision_near
+                        self.cover = self.find_cover(x, y, ex, ey, eye_z, zone, t)
+                        self.cover_t = t
+                    if self.cover is not None:
+                        goal, why = self.cover, "retreat"
             if goal is None:
                 goal, why = self.roam(x, y, zone, t), "roam"
             move = self.nav.dir_to(x, y, goal[0], goal[1], t)
