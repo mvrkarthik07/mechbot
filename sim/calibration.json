@@ -1,10 +1,23 @@
 {
-  "aim_scale": 0.85,
+  "aim_scale": 0.75,
+  "hitscan": 0.8,
+  "linear_fit": {
+    "a": 0.3280426292597949,
+    "b": 2.3538083960513276
+  },
   "pressure": 2,
   "scores": {
+    "cand1": 3.54,
+    "cand11": 3.92,
+    "cand20": 3.67,
+    "v1": 3.38,
     "v3": 3.4
   },
   "validation_predictions": {
-    "v3": 3.345
+    "cand1": 3.615,
+    "cand11": 3.95,
+    "cand20": 4.455,
+    "v1": 3.39,
+    "v3": 3.31
   }
 }

@@ -25,3 +25,18 @@ python3 -B -m sim.evaluate --jobs 6 calibrate --score cand20=REAL_SCORE
 The command checks all 200 randomized validation matches for v1, v3, and every recorded real-scored candidate. It keeps the current distribution when it matches the real order and every error is within ±0.40. Otherwise it screens six profiles on 24 validation seeds and confirms the two strongest on the full split. If the raw model still misses the order or tolerance, it fits the requested least-squares map from simulated validation to real scores. A positive linear map preserves simulated ranking, so any raw ordering error remains a model limitation. The holdout is reserved for the report.
 
 The calibration file records the parameters, measured real scores, and matching simulated validation means. The earlier fixed-opponent calibration and its history are available at commit `7a6410d`. Ground-only motion and the approximate house tactics remain the main limits on competitive prediction.
+
+## Fit against the five official scores
+
+Selected aim scale 0.75, pressure 2, and early laser probability 0.80. The raw model still reverses cand11 and cand20.
+The fallback is **predicted real = 0.3280 × raw validation + 2.3538**.
+
+| Bot | Official | Raw validation | Predicted real | Absolute error | Leave-one-out error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `v1` | 3.38 | 3.390 | 3.466 | 0.086 | 0.131 |
+| `v3` | 3.40 | 3.310 | 3.440 | 0.040 | 0.068 |
+| `cand1` | 3.54 | 3.615 | 3.540 | 0.000 | 0.000 |
+| `cand11` | 3.92 | 3.950 | 3.650 | 0.270 | 0.360 |
+| `cand20` | 3.67 | 4.455 | 3.815 | 0.145 | 0.647 |
+
+The official loss for cand20 vetoes using that change as a submission, even if it passes simulator gates. Leave-one-out errors omit each version from the linear fit while retaining the selected house profile. They do not measure generalization to independent real matches.

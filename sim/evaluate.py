@@ -261,6 +261,7 @@ def main():
                     if name not in REFS:
                         name = subprocess.check_output(
                             ["git", "rev-parse", "--verify", "--end-of-options", f"{name}^{{commit}}"], cwd=sim.ROOT, text=True).strip()
+                        name = next((label for label, ref in REFS.items() if ref == name), name)
                 except (ValueError, subprocess.CalledProcessError):
                     parser.error(f"expected a bot label or commit and a score from 0 to 15, got {pair!r}")
                 scores[name] = score

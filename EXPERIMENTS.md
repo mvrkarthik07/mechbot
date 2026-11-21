@@ -40,3 +40,11 @@ Experiments 1–36 used the same 100 seeds and the earlier fixed [house calibrat
 | exp34 | Continuing to move after breaking every known firing line gives up opportunities to regenerate. | Stop retreat movement while protected by cover inside the forecast zone. | 5.53 → 5.54 | 3.49 → 3.47 | 123.93 → 121.27 | 3.07 | Reverted |
 | exp35 | Keeping gun lead during the first part of a laser charge will add damage before the laser is ready. | Switch from gun lead to direct aim only in the final two decision intervals of the laser charge. | 5.53 → 5.65 | 3.49 → 3.58 | 123.93 → 126.54 | 2.96 | Reverted |
 | exp36 | Selecting a walkable direction when stuck will escape exposed wall collisions faster. | Choose a clear escape direction before falling back to the commanded jump and boost. | 5.53 → 5.34 | 3.49 → 3.28 | 123.93 → 119.67 | 3.04 | Reverted |
+
+## Recalibrated trials from cand11
+
+B1–B9 retest the hypotheses from exp12–exp20 individually. The real practice score for the baseline is 3.92.
+
+- B10. Keeping projectile lead during the first part of the laser charge will let the gun deal more damage before the beam can fire.
+- B11. A remembered mech behind cover can draw aim away from an exposed threat, giving that opponent more free shots.
+- B12. Retreating along a walkable lane that breaks line of sight will stop damage sooner than running straight away from the pursuer.

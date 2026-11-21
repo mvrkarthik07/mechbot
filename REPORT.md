@@ -2,7 +2,7 @@
 
 ## Real-score update
 
-The official scorer's best version is **`cand11`**, commit `b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26`, at **3.92**. The next kept change, projectile dodging in `cand20` (`fe235ea72c91623e545759413d153ca889134348`), scored **3.67**. Exp15 and exp16 were reverted trials and have no historical tags to submit. The following benchmark is historical. The randomized rerun and calibration against all five official scores are in progress.
+The official scorer's best version is **`cand11`**, commit `b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26`, at **3.92**. The next kept change, projectile dodging in `cand20` (`fe235ea72c91623e545759413d153ca889134348`), scored **3.67**. Exp15 and exp16 were reverted trials and have no historical tags to submit. The randomized calibration completed on all five official scores. The raw model still ranks cand20 above cand11. The linear fallback, residuals, and leave-one-out errors are in [sim/CALIBRATION.md](sim/CALIBRATION.md). The tables below are historical while the new candidate reruns finish.
 
 
 **Best candidate is `cand20` (`fe235ea`) at 5.53 simulated points.** It gained 2.12 points over v3 on the tuning seeds and 1.60 on untouched seeds. The best simulated mean remains below the new 7–10 point target. The real scorer has yet to evaluate these candidates.
