@@ -741,7 +741,11 @@ class Bot:
             cz = tp[2] + (4.5 if is_mech else 1.75 if is_npc else 1.2)
             vel = aim_obj.get("vel", [0, 0, 0])
             gspeed = gun["stats"].get("speed", 252) if gun else 252
-            lx, ly, lz = self.lead(x, y, muz_z, tp[0], tp[1], cz, vel[0], vel[1], vel[2], gspeed)
+            li = kinds.get("laser")
+            if li is not None and weapons[li].get("charge", 0) > 0:
+                lx, ly, lz = tp[0], tp[1], cz
+            else:
+                lx, ly, lz = self.lead(x, y, muz_z, tp[0], tp[1], cz, vel[0], vel[1], vel[2], gspeed)
             aim = list(self.aim_at(x, y, muz_z, lx, ly, lz))
             d = math.hypot(tp[0] - x, tp[1] - y)
             yaw_err = abs(wrap(cur_yaw - aim[0]))
@@ -756,7 +760,6 @@ class Bot:
                         and d < gun["stats"].get("range", 230):
                     fire[gi] = True
             # laser: charge while we have a line, release at full charge when on target
-            li = kinds.get("laser")
             if li is not None and allowed:
                 lw = weapons[li]
                 full = lw["stats"].get("charge", 0.75)

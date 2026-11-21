@@ -64,6 +64,24 @@ class SimulatorTest(unittest.TestCase):
         match.triggers(p)
         self.assertEqual(gun.ammo, p.weapon_stats["gun"]["mag"])
 
+    def test_bot_aims_charged_laser_without_projectile_lead(self):
+        match = self.match()
+        p = match.player
+        match.living = match.mechs.copy()
+        zone = match.zone()
+        laser = p.weapons[1] = match.new_weapon("laser")
+        x, y, z = p.pos
+        target = dict(id=match.house[0].id, kind="mech", pos=[x + 90, y, z],
+                      vel=[0, 10, 0], aim=[0, 0], hp=p.hp, max_hp=p.hp, weapons=["gun"])
+        with patch.object(match.grid, "los", return_value=True):
+            obs = match.observation(zone)
+            obs["mechs"] = [target]
+            self.assertGreater(match.bot.act(obs)["aim"][0], 0.01)
+            match.t = match.dt
+            laser.charge_start = 0
+            obs["self"]["weapons"][1] = match.weapon_obs(p, laser)
+            self.assertAlmostEqual(match.bot.act(obs)["aim"][0], 0)
+
     def test_lightning_cancels_laser_charge(self):
         match = self.match()
         p = match.player
