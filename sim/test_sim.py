@@ -208,3 +208,20 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(match.squad_contact[0], contact)
         self.assertEqual(match.contact_stats["gap"], 1)
         self.assertNotIn("fire", match.hunters[0].action)
+
+    def test_laser_releases_a_lethal_partial_charge(self):
+        match = Match(self.hello, self.arena, Bot, 1200)
+        match.living = match.mechs.copy()
+        match.t = 0.3
+        player = match.player
+        player.weapons[1] = match.new_weapon("laser")
+        player.weapons[1].charge_start = 0
+        x, y, z = player.pos
+        player.aim = 0, math.atan2(player.stats["height"] / 2 - player.stats["muzzle_height"], 60)
+        obs = match.observation(match.zone())
+        obs["mechs"] = [
+            dict(id=match.house[0].id, kind="mech", pos=[x + 60, y, z], vel=[0, 0, 0],
+                 aim=[0, 0], hp=70, max_hp=player.hp, weapons=["gun"])
+        ]
+        with patch.object(match.grid, "los", return_value=True):
+            self.assertFalse(match.bot.act(obs)["fire"][1])

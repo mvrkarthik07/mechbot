@@ -765,7 +765,16 @@ class Bot:
                 full = lw["stats"].get("charge", 0.75)
                 ch = lw.get("charge", 0) or 0
                 if ch > 0:
-                    ready = ch >= full * 0.97 and yaw_err < tol and pitch_err < tol * 2 and clear
+                    cfg = lw["stats"]
+                    cube = self.cfg["cubes"]
+                    multiplier = 1 + cube["damage_per_cube"] * min(me["cubes"], cube["stat_cap"])
+                    fraction = cfg["min_frac"] + (1 - cfg["min_frac"]) * min(1, ch / full)
+                    lethal = ch >= cfg["min_charge"] and aim_obj.get("hp", math.inf) < cfg["damage"] * multiplier * fraction * 0.8
+                    dt = 1 / self.cfg["match"]["tick_hz"]
+                    turn = cfg["charge_turn_mult"]
+                    ready = ((ch >= full * 0.97 or lethal) and clear
+                             and yaw_err < tol + st["turn_rate"] * turn * dt
+                             and pitch_err < tol * 2 + st["pitch_rate"] * turn * dt)
                     fire[li] = not ready  # keep holding until ready, then let go
                 elif lw.get("cooldown", 0) <= 0.05 and clear and d < lw["stats"].get("range", 280) - 10 \
                         and not (is_mech and t_light and d < 55):
