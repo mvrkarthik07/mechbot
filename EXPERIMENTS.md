@@ -45,6 +45,20 @@ Experiments 1–36 used the same 100 seeds and the earlier fixed [house calibrat
 
 B1–B9 retest the hypotheses from exp12–exp20 individually. The real practice score for the baseline is 3.92.
 
-- B10. Keeping projectile lead during the first part of the laser charge will let the gun deal more damage before the beam can fire.
-- B11. A remembered mech behind cover can draw aim away from an exposed threat, giving that opponent more free shots.
-- B12. Retreating along a walkable lane that breaks line of sight will stop damage sooner than running straight away from the pursuer.
+
+Scores show the overall mean, paired delta, and paired lenient/strict deltas. FFA shows the mean and the paired delta.
+
+| Trial | Hypothesis | Change | Tuning | Validation | Validation FFA | Predicted real | Max act p99 (ms) | Decision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| B1 | Earlier access to the now-accurate laser will win more duels before the squad ramps up. | Increase the laser pickup preference | 4.190 (+0.135, +0.08/+0.19) | 3.965 (+0.015, +0.12/-0.09) | — | 3.654 | 8.27 | Reverted |
+| B2 | Starting the next fight after only a partial heal loses otherwise winnable trades. | Raise the heal threshold to 98% HP | 4.025 (-0.030, -0.15/+0.09) | — | — | — | 8.50 | Reverted |
+| B3 | Closer fights will improve our gun hit rate and speed up kills enough to pay for the extra risk. | Reduce preferred duel range to 65 m | 3.980 (-0.075, +0.13/-0.28) | — | — | — | 8.65 | Reverted |
+| B4 | A retreat toward cover selected from damage bearing will break hidden gunfire sooner than ordinary roaming. | Use damage bearing to seek cover while healing | 4.210 (+0.155, +0.24/+0.07) | 4.190 (+0.240, +0.26/+0.22) | 9.915 (+0.145) | 3.728 | 8.32 | Kept as candB4 |
+| B5 | Routing through a nearby reachable crate will equip us or earn a cube before the first duels. | Route toward a reachable starter crate | 4.190 (+0.135, +0.15/+0.12) | 4.075 (+0.125, +0.03/+0.22) | — | 3.691 | 8.12 | Reverted |
+| B6 | Mortar aim overrides a usable gun firing line and wastes gun shots. | Reserve mortar aim for a blocked line or unavailable gun | 3.980 (-0.075, -0.03/-0.12) | — | — | — | 7.96 | Reverted |
+| B7 | Earlier armor and faster regeneration will survive more gun-heavy engagements than plating-first upgrades. | Rank nanites and armor ahead of plating | 4.095 (+0.040, +0.09/-0.01) | 3.930 (-0.020, -0.06/+0.02) | — | 3.643 | 7.91 | Reverted |
+| B8 | Lightning's cone and laser short will win enough close fights to beat laser-first looting. | Rank lightning ahead of laser | 3.600 (-0.455, -0.61/-0.30) | — | — | — | 8.03 | Reverted |
+| B9 | Accelerating sideways away from a visible round's projected path will cut gun damage. | Dodge projected rounds | 4.590 (+0.535, +0.27/+0.80) | 4.455 (+0.505, +0.67/+0.34) | 11.075 (+1.305) | 3.815 | 8.26 | Reverted, real-score veto |
+| B10 | Keeping projectile lead during the first part of the laser charge will let the gun deal more damage before the beam can fire. | Keep gun lead until the last two charging decisions | 3.985 (-0.070, -0.03/-0.11) | — | — | — | 8.05 | Reverted |
+| B11 | A remembered mech behind cover can draw aim away from an exposed threat, giving that opponent more free shots. | Prioritize targets with a clear muzzle line | 4.250 (+0.195, +0.33/+0.06) | 4.010 (+0.060, +0.09/+0.03) | — | 3.669 | 7.99 | Reverted |
+| B12 | Retreating along a walkable lane that breaks line of sight will stop damage sooner than running straight away from the pursuer. | Choose a walkable escape lane during retreat | 4.200 (+0.145, +0.07/+0.22) | 3.975 (+0.025, -0.02/+0.07) | — | 3.658 | 7.94 | Reverted |

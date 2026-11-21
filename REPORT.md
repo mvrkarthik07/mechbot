@@ -1,39 +1,63 @@
-# Mech Royale practice report
+# Mech Royale evaluation
 
-## Real-score update
+Each row uses 200 matches per split. Practice columns show the mean followed by the lenient and strict bands.
+Free-for-all uses the validation seeds with the same fixed opponent roster for every row.
 
-The official scorer's best version is **`cand11`**, commit `b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26`, at **3.92**. The next kept change, projectile dodging in `cand20` (`fe235ea72c91623e545759413d153ca889134348`), scored **3.67**. Exp15 and exp16 were reverted trials and have no historical tags to submit. The randomized calibration completed on all five official scores. The raw model still ranks cand20 above cand11. The linear fallback, residuals, and leave-one-out errors are in [sim/CALIBRATION.md](sim/CALIBRATION.md). The tables below are historical while the new candidate reruns finish.
+| Bot | Commit | Practice tuning | Practice validation | Final holdout | FFA validation | Predicted real | Validation act p99 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `v1` | `c0a9f2e31640efbe1fe483dfa3ebb8971ff904d9` | 3.400 (4.25 / 2.55) | 3.390 (4.16 / 2.62) | 3.775 (4.72 / 2.83) | 8.950 | 3.466 | 7.64 ms |
+| `v3` | `49501d3408b991ff2f53501e28fc7e4cc6348491` | 3.025 (3.68 / 2.37) | 3.310 (4.16 / 2.46) | 3.350 (4.22 / 2.48) | 9.380 | 3.440 | 7.54 ms |
+| `cand1` | `fb04a6eb349752f1e6930da5b8d0239915f0a34d` | 3.560 (4.23 / 2.89) | 3.615 (4.61 / 2.62) | 3.890 (4.84 / 2.94) | 9.550 | 3.540 | 7.39 ms |
+| `cand11` | `b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26` | 4.055 (4.89 / 3.22) | 3.950 (5.18 / 2.72) | 4.315 (5.42 / 3.21) | 9.770 | 3.650 | 7.45 ms |
+| `cand20` | `fe235ea72c91623e545759413d153ca889134348` | 4.590 (5.16 / 4.02) | 4.455 (5.85 / 3.06) | 4.845 (5.93 / 3.76) | 11.075 | 3.815 | 8.26 ms |
+| `candB4` | `653ceb448ad9f261f3c2024cf32159a1e11ebbff` | 4.210 (5.13 / 3.29) | 4.190 (5.44 / 2.94) | 4.410 (5.45 / 3.37) | 9.915 | 3.728 | 7.71 ms |
 
+## Paired checks against the preceding historical bot
 
-**Best candidate is `cand20` (`fe235ea`) at 5.53 simulated points.** It gained 2.12 points over v3 on the tuning seeds and 1.60 on untouched seeds. The best simulated mean remains below the new 7–10 point target. The real scorer has yet to evaluate these candidates.
+These comparisons use only tuning, validation, and validation FFA. Historical commits retain their tags.
 
-| Bot | Commit | Tuning seeds 0–99 | Untouched seeds 100–199 | Tuning kills | Tuning mean death | Tuning `act()` p99 |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 | `49501d3` | 3.41 | 3.37 | 1.81 | 97.45 s | 2.93 ms |
-| `cand1` | `fb04a6e` | 4.29 | — | 2.39 | 111.51 s | 2.79 ms |
-| `cand11` | `b7bdc6b` | 4.60 | 4.35 | 2.71 | 112.53 s | 2.93 ms |
-| `cand20` | `fe235ea` | **5.53** | **4.97** | **3.49** | **123.93 s** | 2.84 ms |
+| Candidate vs. base | Tuning Δ | Validation Δ | Validation lenient / strict Δ | FFA Δ | Gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `v3` vs. `v1` | -0.375 | -0.080 | +0.00 / -0.16 | +0.430 | Fail |
+| `cand1` vs. `v3` | +0.535 | +0.305 | +0.45 / +0.16 | +0.170 | Pass |
+| `cand11` vs. `cand1` | +0.495 | +0.335 | +0.57 / +0.10 | +0.220 | Pass |
+| `cand20` vs. `cand11` | +0.535 | +0.505 | +0.67 / +0.34 | +1.305 | Pass |
 
-On the untouched seeds, `cand20` beat `cand11` in 40 matches, tied in 33, and lost in 27. The paired gain was 0.62 points. Its held-out mean was 0.56 below the tuning result, so the tuning score is an optimistic estimate of what another seed set may yield.
+## Real-score calibration
 
-## Deaths in the best tuning batch
+Fallback fit: predicted real = 0.3280 × simulated validation + 2.3538.
+The map was fitted to the recorded real scores. Errors in the table are fitted residuals.
 
-1. Easy house gunfire in 36 matches.
-2. Medium house gunfire in 22 matches.
-3. Hard house gunfire and the zone tied at 10 matches each.
+Raw simulated ordering matches the real ordering: no.
 
-## Experiments
+| Bot | Real practice | Raw sim validation | Predicted real | Absolute prediction error |
+| --- | ---: | ---: | ---: | ---: |
+| `cand1` | 3.54 | 3.615 | 3.540 | 0.000 |
+| `cand11` | 3.92 | 3.950 | 3.650 | 0.270 |
+| `cand20` | 3.67 | 4.455 | 3.815 | 0.145 |
+| `v1` | 3.38 | 3.390 | 3.466 | 0.086 |
+| `v3` | 3.40 | 3.310 | 3.440 | 0.040 |
 
-The log covers 36 trials on 100 paired seeds each. Moving after a recent hit when trying to heal gained 0.88 points. Aiming the charged hitscan laser directly at the target gained 0.31 more. Projecting rounds and steering sideways to clear their path gained the largest increment, 0.93 on the tuning seeds.
+## Deaths for the best real-scored bot, cand11
 
-A new retreat path helped the earlier laser-aim candidate and regressed after adding projectile dodging. Dodging before the first hit also regressed. Holding a dodge longer gained 0.15, below the keep threshold. Range changes, early zone rotation, more aggressive loot priorities, and changes to healing and upgrades fell short. The [experiment log](EXPERIMENTS.md) lists the paired results.
+- easy/gun in 92 validation matches
+- easy/laser in 34 validation matches
+- medium/gun in 29 validation matches
 
-The [frozen calibration](sim/CALIBRATION.md) scored the v3 reference at 3.41 and the kit starter at 1.44. The best tuning batch averaged 0.73 s per match and peaked at 4.84 s. The official conformance check passed on the host and in the Linux/amd64 Docker image under the match limits. Docker response time was 6.9 ms p99 with zero late responses.
+## Protocol
 
-## Real scorer order
+Tuning uses seeds 1000–1199, validation 1200–1399, and final holdout 1400–1599. Each practice split contains 100 lenient and 100 strict profiles. Only tuning, validation, and validation FFA feed the keep gate.
 
-1. `cand20` (`fe235ea72c91623e545759413d153ca889134348`), simulated 5.53 on tuning seeds and 4.97 on untouched seeds.
-2. `cand11` (`b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26`), simulated 4.60 on tuning seeds and 4.35 on untouched seeds.
-3. `cand1` (`fb04a6eb349752f1e6930da5b8d0239915f0a34d`), simulated 4.29 on tuning seeds.
+FFA seats one candidate, one copy each of five fixed historical revisions, the kit starter, and nine independent house mechs. It uses the same ground-only arena approximation as practice.
 
-Reopen calibration if a candidate's real score differs from its simulated tuning mean by more than 0.5 points. The simulator uses a ground-only approximation against the house squad. Free-for-all performance remains unmeasured.
+The old 100-seed results remain in [EXPERIMENTS.md](EXPERIMENTS.md). The profile ranges, score update command, and limits of calibration are in [sim/CALIBRATION.md](sim/CALIBRATION.md).
+
+## What transferred
+
+Healing movement and direct aim when releasing a charged laser raised the actual score through cand11. The projectile-dodge experiment gained 0.93 on the old tuning split and lost 0.25 in real practice. The simulated dodge window is likely more useful than the real one. Cand20 remains excluded based on the measured real loss. No historical midpoint tag exists. CandB4 re-tests exp15 as a single change on top of cand11. Its paired validation gain was +0.240 and its paired validation FFA gain was +0.145. The largest act p99 across the three decision batches was 8.32 ms.
+
+## Next real submissions
+
+1. `candB4` (`653ceb448ad9f261f3c2024cf32159a1e11ebbff`), predicted real 3.728. The fitted gain over cand11 is 0.079, within the observed noise of the real scorer.
+
+One unscored candidate cleared the gates. The best verified real version remains cand11 at 3.92, and the 5.30 real target remains unverified. The simulator still includes its own projectiles in observations, which the real protocol omits. This is a limitation when interpreting projectile-reactive behavior.
