@@ -148,3 +148,27 @@ class SimulatorTest(unittest.TestCase):
         for key in ("points", "kills", "death_time", "killer", "damage", "modes", "stuck"):
             self.assertEqual(first[key], second[key], key)
         self.assertGreater(checked, 100)
+
+    def test_ffa_bots_independently_target_and_damage_one_another(self):
+        from sim.sim import opposition
+
+        match = Match(self.hello, self.arena, Bot, 1200, profile=opposition(1200), roster=(Bot,) * 6)
+        match.living = match.mechs.copy()
+        match.death_ticks = {}
+        self.assertEqual((len(match.controllers), len(match.house)), (7, 9))
+        self.assertEqual(len({id(m.brain) for m in match.controllers}), 7)
+        self.assertEqual(len({id(m.rng) for m in match.controllers}), 7)
+        attacker, other_house = match.house[:2]
+        other_bot = next(m for m in match.controllers if m is not match.player)
+        zone = match.zone()
+        with patch.object(match, "visible", side_effect=lambda m, pos, height=0: m is attacker and pos is other_house.pos):
+            match.free_for_all()
+        self.assertIs(attacker.target, other_house)
+        self.assertTrue(match.can_hit(attacker, other_house))
+        match.hit(attacker, other_house, "gun", 10, attacker.pos)
+        self.assertLess(other_house.hp, other_house.stats["hp"])
+        match.hit(attacker, other_bot, "gun", 10, attacker.pos)
+        self.assertEqual(other_bot.events[-1]["by"], attacker.id)
+        self.assertEqual(match.observation(zone)["events"], [])
+        self.assertEqual(match.observation(zone, other_bot)["events"][-1]["by"], attacker.id)
+        self.assertEqual(match.observation(zone, other_bot)["events"], [])

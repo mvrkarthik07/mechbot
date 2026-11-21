@@ -1,6 +1,6 @@
 # Bot experiments
 
-Each row uses the same 100 seeds and the frozen [house calibration](sim/CALIBRATION.md). A change needs at least +0.25 mean points and `act()` p99 below 15 ms. Death time is the mean among matches where the bot died.
+Experiments 1–36 used the same 100 seeds and the earlier fixed [house calibration](sim/CALIBRATION.md). A change needs at least +0.25 mean points and `act()` p99 below 15 ms. Death time is the mean among matches where the bot died. Later keep decisions use the [200-seed evaluation gates](README.md#local-evaluation).
 
 | ID | Hypothesis | Change | Mean points | Mean kills | Mean death (s) | p99 (ms) | Result |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- |

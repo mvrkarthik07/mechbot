@@ -9,9 +9,11 @@ import math
 import random
 import runpy
 import statistics
+import subprocess
 import sys
 import time
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass, field
 from itertools import count
 from pathlib import Path
@@ -24,7 +26,14 @@ import mechfight as mf
 from bot import Bot, GridMap, Nav, clamp, unit, wrap
 
 KIT = ROOT / "mechfight-kit"
-SEEDS = tuple(range(100))
+SEEDS = {
+    "tuning": tuple(range(1000, 1200)),
+    "validation": tuple(range(1200, 1400)),
+    "holdout": tuple(range(1400, 1600)),
+}
+BANDS = ("lenient", "strict")
+FFA_REFS = ("fe235ea", "b7bdc6b", "fb04a6e", "49501d3", "c0a9f2e")
+DEFAULT_CALIBRATION = Path(__file__).with_name("calibration.json")
 SQUAD = ("easy",) * 4 + ("medium",) * 4 + ("hard",) * 4 + ("expert",) * 3
 # House AI parameters, independent of game balance.
 HOUSE = {
@@ -34,6 +43,46 @@ HOUSE = {
     "hard": (0.9, 0.85, 0.20, 90),
     "expert": (0.5, 1.0, 0.10, 105),
 }
+
+
+@dataclass(frozen=True)
+class Opposition:
+    band: str
+    aim: float
+    lead: float
+    reaction: float
+    per_kill: float
+    all_after: float
+    weapons: tuple
+
+
+def opposition(seed, aim_scale=1.0, pressure=0.0):
+    """Draw matched profiles from the two halves of a difficulty distribution."""
+    rng = random.Random(seed ^ 0xFACE771)
+    band = BANDS[seed % 2]
+
+    def draw(lo, hi):
+        a, b = (0, 0.5) if band == "lenient" else (0.5, 1)
+        u = rng.uniform(a, b)
+        # A monotone warp preserves both band membership and the requested support.
+        within_band = (u - a) * 2
+        u = a + 0.5 * within_band ** (2 ** -pressure)
+        return lo + (hi - lo) * u
+
+    aim = aim_scale * draw(1.5, 0.5)
+    lead = draw(0.3, 1.0)
+    reaction = draw(1.0, 0.1)
+    per_kill = draw(0.25, 1.0)
+    all_after = draw(360, 240)
+    laser_share = rng.random()
+    weapons = tuple("laser" if rng.random() < laser_share else "lightning" for _ in range(7))
+    return Opposition(band, aim, lead, reaction, per_kill, all_after, weapons)
+
+
+def read_calibration(path=DEFAULT_CALIBRATION):
+    if not path.exists():
+        return dict(aim_scale=1.0, pressure=0.0, scores={"v3": 3.40})
+    return json.loads(path.read_text())
 
 
 def distance(a, b):
@@ -101,6 +150,14 @@ class Body:
     next_shot: float = 0.0
     offer: dict | None = None
     thresholds: int = 0
+    brain: object = None
+    rng: random.Random | None = None
+    memory: dict = field(default_factory=dict)
+    sounds: list = field(default_factory=list)
+    beams: list = field(default_factory=list)
+    last_command: float = -math.inf
+    seen_at: float = -math.inf
+    next_scan: float = 0.0
 
     @property
     def center(self):
@@ -239,14 +296,15 @@ class Arena:
 
 
 class Match:
-    def __init__(self, hello, arena, bot_type, seed, per_kill, all_after):
+    def __init__(self, hello, arena, bot_type, seed, per_kill=0.85, all_after=240, *, profile=None, roster=()):
         self.start_wall = time.perf_counter()
         self.cfg = hello["config"]
         self.arena = arena
         self.grid = arena.grid
         self.rng = rng = random.Random(seed)
         self.sound_rng = random.Random(seed ^ 0x50A0D)
-        self.per_kill, self.all_after = per_kill, all_after
+        self.profile, self.ffa = profile, bool(roster)
+        self.per_kill, self.all_after = (per_kill, all_after) if profile is None else (profile.per_kill, profile.all_after)
         self.dt = 1 / self.cfg["match"]["tick_hz"]
         self.interval = self.cfg["match"]["decide_every"]
         self.tick = 0
@@ -259,12 +317,9 @@ class Match:
         self.act_ms = []
         self.stuck = 0
         self.move_history = []
-        self.memory = {}
         self.cubes = {}
         self.pickups = {}
         self.crates = {}
-        self.sounds = []
-        self.beams = []
         self.projectiles = []
         self.ids = {k: count(start) for k, start in (("cube", 5000), ("pickup", 8000), ("projectile", 30000), ("offer", 1))}
         self.upgrades = {u["id"]: u for u in self.cfg["upgrades"]}
@@ -291,9 +346,24 @@ class Match:
         self.mechs = []
         rules = self.cfg["match"]
         slot = rng.randrange(rules["mechs"])
-        difficulties = iter(SQUAD)
+        # Decouple spawn geometry from the roster and its extra randomness.
+        roster_rng = random.Random(seed ^ 0x8A11CE)
+        others = [i for i in range(rules["mechs"]) if i != slot]
+        if roster:
+            if len(roster) != 6 or rules["mechs"] != 16:
+                raise ValueError("FFA requires five older bot copies, the starter, and a 16-mech arena")
+            roster_rng.shuffle(others)
+        controllers = dict(zip(others, roster))
+        controllers[slot] = bot_type
+        if self.ffa:
+            tiers = ["easy", "easy", "medium", "medium", "medium", "hard", "hard", "expert", "expert"]
+            roster_rng.shuffle(tiers)
+            difficulties = iter(tiers)
+        else:
+            difficulties = iter(SQUAD)
+        loadouts = iter(profile.weapons if profile else ())
         for i in range(rules["mechs"]):
-            for _ in range(800):
+            for _ in range(2400):
                 pos = arena.position(rng, rules["arena_margin"],
                                      (zone_cfg["start_center"], zone_cfg["start_radius"] * rules["spawn_zone_fraction"]))
                 if all(distance(pos, m.pos) >= rules["spawn_min_separation"] for m in self.mechs):
@@ -306,15 +376,17 @@ class Match:
             yaw = rng.uniform(-math.pi, math.pi)
             m.aim = m.desired = (yaw, 0)
             m.weapons[0] = self.new_weapon("gun")
-            if i != slot:
+            if i not in controllers:
                 m.difficulty = next(difficulties)
                 m.nav = Nav(self.grid)
-                m.strafe = rng.choice((-1, 1))
-                if m.difficulty in ("hard", "expert"):
-                    m.weapons[1] = self.new_weapon(rng.choice(("laser", "lightning")))
+                pool = roster_rng if profile or roster else rng
+                m.strafe = pool.choice((-1, 1))
+                if not self.ffa and m.difficulty in ("hard", "expert"):
+                    kind = next(loadouts) if profile else rng.choice(("laser", "lightning"))
+                    m.weapons[1] = self.new_weapon(kind)
             self.mechs.append(m)
         self.player = self.mechs[slot]
-        self.house = sorted((m for m in self.mechs if m is not self.player), key=lambda m: SQUAD.index(m.difficulty))
+        self.house = [m for m in self.mechs if m.difficulty]
         self.hunters = []
         npc = self.cfg["npc"]
         self.npcs = []
@@ -329,8 +401,15 @@ class Match:
             self.add_pickup(self.loot_position(loot["floor_roof_fraction"], i, loot["floor_count"]))
         mf.draw.clear()
         mf.draw.caps = self.cfg["debug"]
-        with patch.dict(bot_type.__init__.__globals__, {"GridMap": lambda *args: self.grid}):
-            self.bot = bot_type(dict(hello, slot=slot, seed=rng.getrandbits(32)))
+        self.controllers = []
+        for i, factory in sorted(controllers.items()):
+            body = self.mechs[i]
+            body.rng = random.Random()
+            bot_seed = (roster_rng if profile or roster else rng).getrandbits(32)
+            with patch.dict(factory.__init__.__globals__, {"GridMap": lambda *args: self.grid, "random": body.rng}):
+                body.brain = factory(dict(deepcopy(hello), slot=i, seed=bot_seed))
+            self.controllers.append(body)
+        self.bot = self.player.brain
 
     def loot_position(self, roof_fraction, i, total):
         if i < round(total * roof_fraction) and self.arena.roofs:
@@ -386,19 +465,20 @@ class Match:
         return False
 
     def sound(self, kind, pos, owner=None):
-        p = self.player
-        if owner is p:
-            return
         st = self.cfg["sound"]
-        dist = distance(p.pos, pos)
-        if dist <= st["range"][kind]:
-            band = "near" if dist < st["near"] else "mid" if dist < st["mid"] else "far"
-            yaw = bearing(p.pos, pos)
-            noise = self.sound_rng.gauss(0, math.radians(st["bearing_noise_deg"]) * p.stats["hearing"])
-            self.sounds.append((self.t, dict(kind=kind, bearing=wrap(yaw + noise), dist=band)))
+        reach = st["range"][kind]
+        for p in self.controllers:
+            if p is owner or p.hp <= 0:
+                continue
+            dist = distance(p.pos, pos)
+            if dist <= reach:
+                band = "near" if dist < st["near"] else "mid" if dist < st["mid"] else "far"
+                yaw = bearing(p.pos, pos)
+                noise = self.sound_rng.gauss(0, math.radians(st["bearing_noise_deg"]) * p.stats["hearing"])
+                p.sounds.append((self.t, dict(kind=kind, bearing=wrap(yaw + noise), dist=band)))
 
     def event(self, body, event_type, **values):
-        if body is self.player:
+        if body.brain is not None:
             body.events.append(dict(type=event_type, **values))
 
     def weapon_obs(self, body, w):
@@ -412,16 +492,17 @@ class Match:
             obs["charge"] = 0 if w.charge_start is None else min(st["charge"], self.t - w.charge_start)
         return obs
 
-    def observation(self, zone):
-        p = self.player
+    def observation(self, zone, p=None):
+        if p is None:
+            p = self.player
         vision = self.cfg["vision"]
         actors = []
-        for m in self.mechs + self.npcs:
+        for m in self.living + self.npcs:
             if m is p or m.hp <= 0:
                 continue
             if self.visible(p, m.pos, m.stats["height"]):
-                self.memory[m.id] = self.t + vision["memory_s"]
-            elif self.memory.get(m.id, -1) < self.t:
+                p.memory[m.id] = self.t + vision["memory_s"]
+            elif p.memory.get(m.id, -1) < self.t:
                 continue
             actor = dict(id=m.id, kind=m.kind, pos=list(m.pos), aim=list(m.aim), vel=list(m.vel))
             if m.kind == "npc" or vision["show_enemy_hp"]:
@@ -442,8 +523,8 @@ class Match:
                    in_zone=self.in_zone(p.pos), stats=p.stats.copy())
         obs = {"type": "obs", "tick": self.tick, "t": self.t, "alive": len(self.living), "self": own,
                "zone": zone, "offer": p.offer, "mechs": actors, "drops": drops, "events": p.events,
-               "sounds": [dict(d, age=self.t - t) for t, d in self.sounds],
-               "beams": [dict(d, age=self.t - t) for t, d in self.beams],
+               "sounds": [dict(d, age=self.t - t) for t, d in p.sounds],
+               "beams": [dict(d, age=self.t - t) for t, d in p.beams],
                "crates": [dict(id=m.id, pos=list(m.pos), hp=m.hp) for m in self.crates.values()
                           if self.visible(p, m.pos, m.stats["height"])],
                "cubes": [dict(id=i, pos=list(pos)) for i, pos in self.cubes.items()
@@ -452,7 +533,7 @@ class Match:
                            if self.visible(p, at_height(pos, 0.5))],
                "projectiles": [dict(id=q.id, kind=q.kind, pos=list(q.pos), vel=list(q.vel))
                                for q in self.projectiles if self.visible(p, q.pos)]}
-        p.events, self.sounds, self.beams = [], [], []
+        p.events, p.sounds, p.beams = [], [], []
         return obs
 
     def give_cubes(self, body, n):
@@ -460,7 +541,7 @@ class Match:
         body.cubes += n
         self.apply_stats(body)
         while self.offer(body):
-            if body is self.player:
+            if body.brain is not None:
                 break
             self.pick(body, 0)
 
@@ -632,8 +713,9 @@ class Match:
 
     def separate_player(self):
         # shortcut: resolve player overlaps, add squad spacing physics if late-game pileups matter.
-        p = self.player
-        for m in self.hunters:
+        pairs = ((p, m) for i, p in enumerate(self.living) for m in self.living[i + 1:]) if self.ffa else (
+            (self.player, m) for m in self.hunters)
+        for p, m in pairs:
             dx, dy = p.pos[0] - m.pos[0], p.pos[1] - m.pos[1]
             radius = p.stats["radius"] + m.stats["radius"]
             if dx * dx + dy * dy >= radius * radius:
@@ -649,7 +731,7 @@ class Match:
     def can_hit(self, owner, target):
         if target.hp <= 0 or owner is target:
             return False
-        return not (owner.difficulty and target.difficulty)
+        return self.ffa or not (owner.difficulty and target.difficulty)
 
     def hit(self, owner, target, kind, damage, source, effect=None):
         if target.hp <= 0:
@@ -669,6 +751,7 @@ class Match:
             target.target = owner
         if target is self.player:
             self.damage[kind] += damage
+        if target.brain is not None:
             self.event(target, "damaged", amount=damage, weapon=kind, bearing=yaw,
                        by=owner.id if owner else None, rear=rear)
         if owner is not None:
@@ -692,8 +775,9 @@ class Match:
                     if w and w.kind != "gun":
                         w.charge_start, w.release = None, False
                         self.add_pickup(target.pos, w)
-            if owner is self.player and target is not owner:
-                self.kills += 1
+            if owner is not None and target is not owner:
+                if owner is self.player:
+                    self.kills += 1
                 self.event(owner, "kill", target=target.id)
         else:
             self.add_cubes(target.pos, target.stats["cubes"])
@@ -705,7 +789,7 @@ class Match:
 
     def targets(self, owner):
         # The squad never damages its own members. Most incoming rounds only need one actor check.
-        actors = [self.player] if owner.difficulty else self.living
+        actors = [self.player] if owner.difficulty and not self.ffa else self.living
         return (m for group in (actors, self.npcs, self.crates.values()) for m in group if self.can_hit(owner, m))
 
     def ray_targets(self, owner, start, vector, length, padding=0):
@@ -768,8 +852,9 @@ class Match:
             self.lightning(m, st, start, vector, damage)
 
     def beam(self, m, kind, path):
-        if m is not self.player and any(self.visible(self.player, pos) for pos in path):
-            self.beams.append((self.t, dict(by=m.id, kind=kind, path=[list(pos) for pos in path])))
+        for p in self.controllers:
+            if p is not m and p.hp > 0 and any(self.visible(p, pos) for pos in path):
+                p.beams.append((self.t, dict(by=m.id, kind=kind, path=[list(pos) for pos in path])))
 
     def lightning(self, m, st, start, vector, damage):
         self.spend(m, st["energy"])
@@ -910,54 +995,106 @@ class Match:
                 if m.home is not None:
                     m.action["move"] = m.nav.dir_to(mx, my, *m.home, self.t)
                 continue
-            aim_error, lead, reaction, preferred = HOUSE[m.difficulty]
-            d = distance(m.pos, p.pos)
-            clear = d < m.weapon_stats["laser"]["range"] and self.grid.los(
-                *at_height(m.pos, m.stats["muzzle_height"]), *p.center)
-            if self.t + 1e-9 >= m.next_react:
-                m.next_react = self.t + reaction
-                if self.rng.random() < reaction * 0.65:
-                    m.strafe *= -1
-                gun = m.weapon_stats["gun"]
-                laser = m.weapons[1] and m.weapons[1].kind == "laser"
-                laser_ready = laser and (m.charging or m.weapons[1].ready <= self.t)
-                travel = 0 if laser_ready else min(d, gun["range"]) / gun["speed"] * lead
-                target = translate(p.center, p.vel, travel)
-                source = at_height(m.pos, m.stats["muzzle_height"])
-                sigma = math.radians(aim_error)
-                m.desired = (bearing(source, target) + self.rng.gauss(0, sigma),
-                             math.atan2(target[2] - source[2], distance(source, target)) + self.rng.gauss(0, sigma))
-            if not in_circle:
-                move = m.nav.dir_to(mx, my, *self.zone_center, self.t)
-            elif clear:
-                if m.weapons[1] and m.weapons[1].kind == "lightning":
-                    preferred = m.weapon_stats["lightning"]["range"] * 0.8
-                rx, ry = unit(p.pos[0] - mx, p.pos[1] - my)
-                radial = clamp((d - preferred) / 25, -1, 1)
-                sx, sy = -ry * m.strafe, rx * m.strafe
-                move = unit(radial * rx + 0.75 * sx, radial * ry + 0.75 * sy)
+            self.house_attack(m, p, self.last_seen, in_circle)
+
+    def free_for_all(self):
+        self.hunters = [m for m in self.house if m.hp > 0]
+        for m in self.hunters:
+            x, y, _ = m.pos
+            zone = self.zones[self.zone_index]
+            in_circle = self.in_zone(m.pos)
+            safe = distance(m.pos, zone["next_center"]) <= zone["next_radius"] * 0.8
+            if self.t >= m.next_scan:
+                m.next_scan = self.t + max(0.2, self.profile.reaction if self.profile else 0.3)
+                nearby = sorted((p for p in self.living if p is not m), key=lambda p: distance(m.pos, p.pos))
+                target = next((p for p in nearby if self.visible(m, p.pos, p.stats["height"])), None)
+                if target is not None:
+                    m.target, m.seen_at = target, self.t
+            if m.target is not None and m.target.hp > 0 and self.t - m.seen_at < self.cfg["vision"]["memory_s"]:
+                self.house_attack(m, m.target, m.target.pos, in_circle)
+                continue
+            goal = zone["next_center"] if not in_circle or not safe else m.home
+            if goal is None or distance(m.pos, goal) < 8:
+                radius = zone["radius"] * 0.65
+                m.home = goal = self.arena.position(self.rng, circle=(zone["center"], radius))
+            move = m.nav.dir_to(x, y, *goal[:2], self.t)
+            if math.hypot(*move) > 0.25:
+                m.desired = math.atan2(move[1], move[0]), 0
+            m.action = dict(move=move, boost=not in_circle and m.energy > m.stats["energy"] / 3)
+
+    def ffa_equipment(self):
+        reach = self.cfg["loot"]["pickup_radius"]
+        for m in self.hunters:
+            if m.weapons[1] is None:
+                options = [(distance(m.pos, pos), key) for key, (pos, w) in self.pickups.items()
+                           if w.kind in ("laser", "lightning") and abs(m.pos[2] - pos[2]) <= 4]
+                if options:
+                    d, key = min(options)
+                    if d <= reach:
+                        m.action["take"] = key
+        taking = []
+        for m in self.living:
+            take = m.action.get("take")
+            if take is not None:
+                item = self.pickups.get(take)
+                taking.append((distance(m.pos, item[0]) if item else math.inf, m.id, m))
+            elif "drop" in m.action:
+                self.equipment(m)
+        for _, _, m in sorted(taking):
+            self.equipment(m)
+
+    def house_attack(self, m, p, goal, in_circle):
+        aim_error, lead, reaction, preferred = HOUSE[m.difficulty]
+        if profile := self.profile:
+            aim_error *= profile.aim
+            lead, reaction = profile.lead, profile.reaction
+        mx, my, _ = m.pos
+        d = distance(m.pos, p.pos)
+        clear = d < m.weapon_stats["laser"]["range"] and self.grid.los(
+            *at_height(m.pos, m.stats["muzzle_height"]), *p.center)
+        if self.t + 1e-9 >= m.next_react:
+            m.next_react = self.t + reaction
+            if self.rng.random() < reaction * 0.65:
+                m.strafe *= -1
+            gun = m.weapon_stats["gun"]
+            laser = m.weapons[1] and m.weapons[1].kind == "laser"
+            laser_ready = laser and (m.charging or m.weapons[1].ready <= self.t)
+            travel = 0 if laser_ready else min(d, gun["range"]) / gun["speed"] * lead
+            target = translate(p.center, p.vel, travel)
+            source = at_height(m.pos, m.stats["muzzle_height"])
+            sigma = math.radians(aim_error)
+            m.desired = (bearing(source, target) + self.rng.gauss(0, sigma),
+                         math.atan2(target[2] - source[2], distance(source, target)) + self.rng.gauss(0, sigma))
+        if not in_circle:
+            move = m.nav.dir_to(mx, my, *self.zone_center, self.t)
+        elif clear:
+            if m.weapons[1] and m.weapons[1].kind == "lightning":
+                preferred = m.weapon_stats["lightning"]["range"] * 0.8
+            rx, ry = unit(p.pos[0] - mx, p.pos[1] - my)
+            radial = clamp((d - preferred) / 25, -1, 1)
+            sx, sy = -ry * m.strafe, rx * m.strafe
+            move = unit(radial * rx + 0.75 * sx, radial * ry + 0.75 * sy)
+            if not self.grid.free(mx + move[0] * 4, my + move[1] * 4):
+                m.strafe *= -1
+                move = unit(radial * rx - 0.75 * sx, radial * ry - 0.75 * sy)
                 if not self.grid.free(mx + move[0] * 4, my + move[1] * 4):
-                    m.strafe *= -1
-                    move = unit(radial * rx - 0.75 * sx, radial * ry - 0.75 * sy)
-                    if not self.grid.free(mx + move[0] * 4, my + move[1] * 4):
-                        move = m.nav.dir_to(mx, my, *p.pos[:2], self.t)
+                    move = m.nav.dir_to(mx, my, *p.pos[:2], self.t)
+        else:
+            if not self.ffa and distance(m.pos, goal) < 12:
+                # A teammate needs to reacquire a moving target beyond the last sighting.
+                goal = p.pos
+            move = m.nav.dir_to(mx, my, *goal[:2], self.t)
+        aligned = abs(wrap(m.desired[0] - m.aim[0])) < math.radians(8)
+        gun_fire = clear and aligned and d < m.weapon_stats["gun"]["range"]
+        second = False
+        if m.weapons[1] is not None:
+            kind = m.weapons[1].kind
+            w = m.weapon_stats[kind]
+            if kind == "laser" and m.charging:
+                second = clear and self.t - m.charging.charge_start < w["charge"]
             else:
-                goal = self.last_seen
-                if distance(m.pos, goal) < 12:
-                    # A teammate needs to reacquire a moving target beyond the last sighting.
-                    goal = p.pos
-                move = m.nav.dir_to(mx, my, *goal[:2], self.t)
-            aligned = abs(wrap(m.desired[0] - m.aim[0])) < math.radians(8)
-            gun_fire = clear and aligned and d < m.weapon_stats["gun"]["range"]
-            second = False
-            if m.weapons[1] is not None:
-                kind = m.weapons[1].kind
-                w = m.weapon_stats[kind]
-                if kind == "laser" and m.charging:
-                    second = clear and self.t - m.charging.charge_start < w["charge"]
-                else:
-                    second = clear and aligned and d < w["range"]
-            m.action = dict(move=move, fire=(gun_fire, second), boost=not in_circle and m.energy > m.stats["energy"] / 3)
+                second = clear and aligned and d < w["range"]
+        m.action = dict(move=move, fire=(gun_fire, second), boost=not in_circle and m.energy > m.stats["energy"] / 3)
 
     def drones(self):
         for m in self.npcs:
@@ -1000,12 +1137,49 @@ class Match:
             dx, dy = unit(goal[0] - m.pos[0], goal[1] - m.pos[1])
             self.move(m, dx * st["speed"], dy * st["speed"], self.cfg["mech"]["ground_accel"])
 
+    def controller_action(self, body, obs):
+        method = body.brain.act
+        scope = method.__globals__
+        had_random = "random" in scope
+        original_random = scope.get("random")
+        scope["random"] = body.rng
+        try:
+            start = time.perf_counter_ns()
+            action = method(obs)
+            elapsed = (time.perf_counter_ns() - start) / 1e6
+        finally:
+            if had_random:
+                scope["random"] = original_random
+            else:
+                del scope["random"]
+        debug = mf.draw.take() or {}
+        if elapsed > self.cfg["bot"]["tick_budget_ms"]:
+            coast = self.cfg["bot"]["coast_s"]
+            action = {k: body.action[k] for k in ("move", "boost", "aim") if k in body.action} if (
+                self.t - body.last_command <= coast) else {}
+        else:
+            body.last_command = self.t
+        body.action = action
+        if "aim" in action:
+            body.desired = action["aim"]
+        if not self.ffa:
+            self.equipment(body)
+            self.resolve_pick(body)
+        return action, elapsed, debug
+
+    def resolve_pick(self, body):
+        if self.offer(body):
+            action = body.action
+            pick = action.get("pick")
+            if isinstance(pick, (int, float)) and 0 <= pick < len(body.offer["choices"]) and pick == int(pick):
+                self.pick(body, int(pick))
+                self.offer(body)
+
     def player_decision(self, obs):
-        start = time.perf_counter_ns()
-        action = self.bot.act(obs)
-        elapsed = (time.perf_counter_ns() - start) / 1e6
+        player = self.player
+        action, elapsed, debug = self.controller_action(player, obs)
         self.act_ms.append(elapsed)
-        label = (mf.draw.take() or {}).get("label", "").split()
+        label = debug.get("label", "").split()
         mode = label[0].rstrip("!") if label else ""
         if mode in {"get", "cube", "drop", "drone"}:
             mode = "loot"
@@ -1013,23 +1187,6 @@ class Match:
             mode = "unlabeled"
         self.modes[mode] += 1
         self.mode = mode
-        player = self.player
-        if elapsed > self.cfg["bot"]["tick_budget_ms"]:
-            # Match transport would drop a late action and clear its triggers.
-            coast = self.cfg["bot"]["coast_s"]
-            action = {k: player.action[k] for k in ("move", "boost", "aim") if k in player.action} if (
-                self.t - self.last_action <= coast) else {}
-        else:
-            self.last_action = self.t
-        player.action = action
-        if "aim" in action:
-            player.desired = action["aim"]
-        self.equipment(player)
-        if self.offer(player):
-            pick = action.get("pick")
-            if isinstance(pick, (int, float)) and 0 <= pick < len(player.offer["choices"]) and pick == int(pick):
-                self.pick(player, int(pick))
-                self.offer(player)
         self.move_history.append((self.t, player.pos))
         while self.t - self.move_history[0][0] > 1.2:
             self.move_history.pop(0)
@@ -1048,7 +1205,6 @@ class Match:
         p = self.player
         self.living = self.mechs.copy()
         self.death_ticks = {}
-        self.last_action = -math.inf
         ticks = round(self.cfg["match"]["duration_s"] / self.dt)
         trace_ticks = round(5 / self.dt)
         for self.tick in range(ticks):
@@ -1056,17 +1212,28 @@ class Match:
             zone = self.zone()
             if self.tick % self.interval == 0:
                 self.player_decision(self.observation(zone))
-                self.squad()
+                if self.ffa:
+                    for body in self.controllers:
+                        if body is not p and body.hp > 0:
+                            self.controller_action(body, self.observation(zone, body))
+                    self.free_for_all()
+                    self.ffa_equipment()
+                    for body in self.controllers:
+                        if body.hp > 0:
+                            self.resolve_pick(body)
+                else:
+                    self.squad()
                 if verbose and self.tick % trace_ticks == 0:
                     self.timeline()
-            if p.offer is not None and self.t >= p.offer["expires"]:
-                self.pick(p, 0)
-                self.offer(p)
+            for body in self.controllers:
+                if body.hp > 0 and body.offer is not None and self.t >= body.offer["expires"]:
+                    self.pick(body, 0)
+                    self.offer(body)
             for m in self.living:
                 self.move_mech(m, zone)
             self.separate_player()
             for m in self.living:
-                if m.hp > 0 and (m is p or m in self.hunters):
+                if m.hp > 0 and (self.ffa or m is p or m in self.hunters):
                     self.triggers(m)
             self.drones()
             self.fly_projectiles()
@@ -1085,7 +1252,7 @@ class Match:
             print(f"finish {self.t:.2f}s points={points} killer={self.killer} damage={dict(self.damage)}", file=sys.stderr)
         return dict(points=points, kills=self.kills, death_time=self.death_time, killer=self.killer,
                     damage=self.damage, modes=self.modes, stuck=self.stuck, act_ms=self.act_ms,
-                    wall_s=time.perf_counter() - self.start_wall)
+                    wall_s=time.perf_counter() - self.start_wall, band=self.profile.band if self.profile else None)
 
 
 def load_hello(kit):
@@ -1103,6 +1270,17 @@ def load_bot(path):
         return runpy.run_path(str(path))["Bot"]
 
 
+def load_git_bot(ref):
+    source = subprocess.check_output(["git", "show", "--end-of-options", f"{ref}:bot.py"], cwd=ROOT)
+    scope = {"__name__": f"bot_{ref}", "__file__": str(ROOT / "bot.py")}
+    exec(compile(source, f"{ref}:bot.py", "exec"), scope)
+    return scope["Bot"]
+
+
+def ffa_roster(kit):
+    return tuple(load_git_bot(ref) for ref in FFA_REFS) + (load_bot(kit / "python/example_bot.py"),)
+
+
 def summarize(results):
     samples = sorted(elapsed for r in results for elapsed in r["act_ms"])
     total = len(samples)
@@ -1117,6 +1295,8 @@ def summarize(results):
             killers["/".join(r["killer"])] += 1
     return dict(matches=len(results), mean_points=statistics.mean(r["points"] for r in results),
                 mean_kills=statistics.mean(r["kills"] for r in results),
+                bands={band: dict(matches=len(scores), mean_points=statistics.mean(scores))
+                       for band in BANDS if (scores := [r["points"] for r in results if r["band"] == band])},
                 mean_death_s=statistics.mean(deaths) if deaths else None,
                 deaths=len(deaths), killed_by=dict(killers.most_common()),
                 damage_taken_per_match={k: round(v / len(results), 1) for k, v in damage.most_common()},
@@ -1134,24 +1314,28 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kit", type=Path, default=KIT)
     parser.add_argument("--bot", type=Path, help="alternate Python bot with a Bot class")
-    parser.add_argument("--matches", type=int, default=len(SEEDS), choices=range(1, len(SEEDS) + 1),
-                        metavar="1–100", help="run the first N fixed seeds")
-    parser.add_argument("--seed", type=int, help="run one match with this seed")
-    parser.add_argument("--per-kill", type=float, default=0.85, help="additional hunters per credited kill")
-    parser.add_argument("--all-after", type=float, default=240, help="send all surviving hunters at this match time")
+    parser.add_argument("--split", choices=("tuning", "validation"), default="tuning")
+    parser.add_argument("--matches", type=int, default=200, choices=range(1, 201),
+                        metavar="1–200", help="run the first N seeds of the selected split")
+    parser.add_argument("--seed", type=int, help="run one diagnostic match outside the final holdout")
+    parser.add_argument("--ffa", action="store_true", help="run the fixed 16-mech free-for-all lobby")
     parser.add_argument("--verbose", action="store_true", help="print the first match as a five-second timeline")
     args = parser.parse_args()
-    if not all(math.isfinite(v) and v >= 0 for v in (args.per_kill, args.all_after)):
-        parser.error("hunter settings must be finite and nonnegative")
+    if args.seed in SEEDS["holdout"]:
+        parser.error("final holdout scores are available only through REPORT.md")
     hello = load_hello(args.kit)
     arena = Arena(hello)
     bot_type = load_bot(args.bot)
-    seeds = (args.seed,) if args.seed is not None else SEEDS[:args.matches]
+    roster = ffa_roster(args.kit) if args.ffa else ()
+    seeds = (args.seed,) if args.seed is not None else SEEDS[args.split][:args.matches]
+    settings = read_calibration()
     results = []
     for seed in seeds:
-        match = Match(hello, arena, bot_type, seed, args.per_kill, args.all_after)
+        profile = opposition(seed, settings["aim_scale"], settings["pressure"])
+        match = Match(hello, arena, bot_type, seed, profile=profile, roster=roster)
         results.append(match.run(args.verbose and not results))
-    print(json.dumps(dict(seeds=list(seeds), **summarize(results)), indent=2))
+    print(json.dumps(dict(split=args.split if args.seed is None else "diagnostic", ffa=args.ffa,
+                          seeds=list(seeds), **summarize(results)), indent=2))
 
 
 if __name__ == "__main__":

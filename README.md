@@ -14,18 +14,20 @@ Python 3.13, standard library only. `bot.py` is the bot; `mechfight.py` is the k
 - **Loot:** weapons, cubes, supply drops, farms NPC drones and crates when no enemy is around.
 - **Upgrades:** plating/armor/regen first, then weapon upgrades for the weapons it holds.
 
-## Local practice simulator
+## Local evaluation
 
 Download and unpack the official [Mech Royale kit](https://www.joinbuilders.org/buildathon/tracks/builders/files/mechfight-kit.tar.gz) here so `mechfight-kit/` sits next to `bot.py`.
 
 ```sh
-python3 -B sim/sim.py --matches 100
-python3 -B sim/sim.py --seed 0 --verbose
-python3 -B sim/sim.py --bot mechfight-kit/python/example_bot.py --matches 100
-python3 -B -m unittest sim.test_sim
+python3 -B sim/sim.py --split tuning
+python3 -B sim/sim.py --seed 1000 --verbose
+python3 -B sim/sim.py --split validation --ffa
+python3 -B -m sim.evaluate --jobs 6 compare --base cand20 --candidate ./bot.py
+python3 -B -m sim.evaluate --jobs 6 report
+python3 -B -m unittest sim.test_sim sim.test_evaluate
 python3 mechfight-kit/check/check.py -- python3 -u bot.py
 ```
 
-The benchmark reads the kit's arena and recorded configuration. A batch uses seeds 0–99 in order, with `--matches` taking a prefix. The simulator reports placement points, kills, cause of death, damage, mode share, and timings as JSON. `--verbose` writes one match timeline to stderr. Stuck time means a movement command above half speed with less than 2 m of displacement over the previous 1–1.2 seconds.
+Tuning uses seeds 1000–1199, validation uses 1200–1399, and the final holdout uses 1400–1599. Each split has 100 lenient and 100 strict opponent profiles. The comparison gate requires +0.25 tuning points, +0.20 validation points, no band loss greater than 0.20 on either practice split, and no FFA loss greater than 0.30 on the validation seeds. The candidate's `act()` p99 must stay below 15 ms. The report is the only output that includes final holdout results.
 
-The simulation uses ground-only motion, the bot's 2 m map, sampled canopy and shot geometry, and a modeled house squad. These approximations affect comparisons involving rooftops, jumps, foliage, and cover edges. A* uses a fixed expansion budget in the simulator so runs use the same paths across machines.
+FFA uses the candidate, five pinned historical bot copies, the kit starter, and nine independent house mechs. The simulator uses ground-only motion, the bot's 2 m map, and sampled canopy and shot geometry. For actual scorer feedback, follow the [calibration procedure](sim/CALIBRATION.md).
