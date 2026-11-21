@@ -57,9 +57,10 @@ class Opposition:
     jitter: float
     adapt: float
     early_laser: int | None
+    pursuit: float
 
 
-def opposition(seed, aim_scale=1.0, pressure=0.0, hitscan=0.45):
+def opposition(seed, aim_scale=1.0, pressure=0.0, hitscan=0.45, pursuit=1.0):
     """Draw matched profiles from the two halves of a difficulty distribution."""
     rng = random.Random(seed ^ 0xFACE771)
     band = BANDS[seed % 2]
@@ -82,7 +83,7 @@ def opposition(seed, aim_scale=1.0, pressure=0.0, hitscan=0.45):
     jitter = rng.uniform(0.25, 1.25)
     adapt = rng.uniform(0.25, 0.8)
     early_laser = rng.randrange(4) if rng.random() < hitscan else None
-    return Opposition(band, aim, lead, reaction, per_kill, all_after, weapons, jitter, adapt, early_laser)
+    return Opposition(band, aim, lead, reaction, per_kill, all_after, weapons, jitter, adapt, early_laser, pursuit)
 
 
 def read_calibration(path=DEFAULT_CALIBRATION):
@@ -399,6 +400,8 @@ class Match:
         self.player = self.mechs[slot]
         self.house = [m for m in self.mechs if m.difficulty]
         self.hunters = []
+        self.squad_contact = None
+        self.contact_stats = Counter()
         npc = self.cfg["npc"]
         self.npcs = []
         for i in range(npc["count"]):
@@ -543,7 +546,7 @@ class Match:
                "pickups": [dict(id=i, pos=list(pos), kind=w.kind) for i, (pos, w) in self.pickups.items()
                            if self.visible(p, at_height(pos, 0.5))],
                "projectiles": [dict(id=q.id, kind=q.kind, pos=list(q.pos), vel=list(q.vel))
-                               for q in self.projectiles if self.visible(p, q.pos)]}
+                               for q in self.projectiles if q.owner is not p and self.visible(p, q.pos)]}
         p.events, p.sounds, p.beams = [], [], []
         return obs
 
@@ -990,9 +993,23 @@ class Match:
         n = len(alive) if self.t >= self.all_after else 1 + math.floor(self.kills * self.per_kill)
         self.hunters = sorted(alive, key=lambda m: (SQUAD.index(m.difficulty), distance(m.pos, p.pos)))[:n]
         active = set(self.hunters)
-        # shortcut: use a shared coarse search fix before contact, replace with patrols if acquisition matters.
-        if not hasattr(self, "last_seen") or any(self.visible(m, p.pos, p.stats["height"]) for m in alive):
+        visible = any(self.visible(m, p.pos, p.stats["height"]) for m in alive)
+        self.contact_stats["decisions"] += 1
+        if visible:
+            if self.squad_contact and self.contact_stats["gap"]:
+                self.contact_stats["reacquisitions"] += 1
+            self.squad_contact = (p.pos, p.vel, self.t)
+            self.contact_stats["gap"] = 0
+        elif self.squad_contact:
+            self.contact_stats["lost"] += 1
+            self.contact_stats["gap"] += 1
+            self.contact_stats["max_gap"] = max(self.contact_stats["max_gap"], self.contact_stats["gap"])
+        pursuit = self.profile.pursuit if self.profile else 0
+        if not pursuit and (not hasattr(self, "last_seen") or visible):
             self.last_seen = p.pos
+        # Give flank assignments stable sides through target reacquisition.
+        ranks = {m: rank for rank, m in enumerate(sorted(self.hunters, key=lambda m: m.id))}
+        front = self.hunters[0] if self.hunters else None
         for m in alive:
             mx, my, _ = m.pos
             in_circle = distance(m.pos, self.zone_center) < self.zone_radius - 12
@@ -1010,7 +1027,43 @@ class Match:
                 if m.home is not None:
                     m.action["move"] = m.nav.dir_to(mx, my, *m.home, self.t)
                 continue
-            self.house_attack(m, p, self.last_seen, in_circle)
+            if pursuit:
+                self.squad_hunter(m, p, visible, in_circle, pursuit, ranks[m], m is front)
+            else:
+                self.house_attack(m, p, self.last_seen, in_circle)
+
+    def squad_hunter(self, m, p, visible, in_circle, pursuit, rank, front):
+        x, y, _ = m.pos
+        if self.squad_contact:
+            point, velocity, when = self.squad_contact
+            age = self.t - when
+            gx, gy, _ = translate(point, velocity, min(age, 0.8))
+        else:
+            gx, gy = self.zone_center
+            age = self.t
+        dx, dy = unit(gx - x, gy - y)
+        distance_to_contact = distance(m.pos, (gx, gy))
+        radius = self.cfg["vision"]["near_range"]
+        if not front or (not visible and distance_to_contact <= radius):
+            # shortcut: stagger search sectors on the ground grid, extend to aerial routes when modeled.
+            phase = int(age / 2.5) if not visible else 0
+            side = -1 if rank % 2 else 1
+            span = radius * clamp(pursuit * (0.55 + 0.18 * (rank // 2)), 0.35, 1.6)
+            a = math.atan2(dy, dx) + side * (math.pi / 2 + phase * math.pi / 3)
+            px, py = gx + math.cos(a) * span, gy + math.sin(a) * span
+            if self.grid.free(px, py) and self.in_zone((px, py)):
+                gx, gy = px, py
+        if not visible:
+            goal = (gx, gy) if in_circle else self.zone_center
+            move = m.nav.dir_to(x, y, *goal, self.t)
+            if math.hypot(*move) > 0.1:
+                m.desired = math.atan2(move[1], move[0]), 0
+            m.action = dict(move=move, boost=m.energy > m.stats["energy"] / 4)
+            return
+        self.house_attack(m, p, (gx, gy), in_circle, directed=True)
+        if in_circle and distance_to_contact > HOUSE[m.difficulty][3] * (1.15 if front else 0.85):
+            m.action["move"] = m.nav.dir_to(x, y, gx, gy, self.t)
+            m.action["boost"] = m.energy > m.stats["energy"] / (5 if pursuit >= 1 else 3)
 
     def free_for_all(self):
         self.hunters = [m for m in self.house if m.hp > 0]
@@ -1058,7 +1111,7 @@ class Match:
         for _, _, m in sorted(taking):
             self.equipment(m)
 
-    def house_attack(self, m, p, goal, in_circle):
+    def house_attack(self, m, p, goal, in_circle, directed=False):
         aim_error, lead, reaction, preferred = HOUSE[m.difficulty]
         if profile := self.profile:
             aim_error *= profile.aim
@@ -1105,7 +1158,7 @@ class Match:
                 if not self.grid.free(mx + move[0] * 4, my + move[1] * 4):
                     move = m.nav.dir_to(mx, my, *p.pos[:2], self.t)
         else:
-            if not self.ffa and distance(m.pos, goal) < 12:
+            if not self.ffa and not directed and distance(m.pos, goal) < 12:
                 # A teammate needs to reacquire a moving target beyond the last sighting.
                 goal = p.pos
             move = m.nav.dir_to(mx, my, *goal[:2], self.t)
@@ -1277,7 +1330,7 @@ class Match:
             print(f"finish {self.t:.2f}s points={points} killer={self.killer} damage={dict(self.damage)}", file=sys.stderr)
         return dict(points=points, kills=self.kills, death_time=self.death_time, killer=self.killer,
                     damage=self.damage, modes=self.modes, stuck=self.stuck, act_ms=self.act_ms,
-                    wall_s=time.perf_counter() - self.start_wall, band=self.profile.band if self.profile else None)
+                    wall_s=time.perf_counter() - self.start_wall, contact=dict(self.contact_stats), band=self.profile.band if self.profile else None)
 
 
 def load_hello(kit):
@@ -1320,6 +1373,8 @@ def summarize(results):
             killers["/".join(r["killer"])] += 1
     return dict(matches=len(results), mean_points=statistics.mean(r["points"] for r in results),
                 mean_kills=statistics.mean(r["kills"] for r in results),
+                mean_longest_contact_gap_ticks=statistics.mean(r["contact"].get("max_gap", 0) for r in results),
+                mean_reacquisitions=statistics.mean(r["contact"].get("reacquisitions", 0) for r in results),
                 bands={band: dict(matches=len(scores), mean_points=statistics.mean(scores))
                        for band in BANDS if (scores := [r["points"] for r in results if r["band"] == band])},
                 mean_death_s=statistics.mean(deaths) if deaths else None,
@@ -1356,7 +1411,7 @@ def main():
     settings = read_calibration()
     results = []
     for seed in seeds:
-        profile = opposition(seed, settings["aim_scale"], settings["pressure"], settings.get("hitscan", 0.45))
+        profile = opposition(seed, settings["aim_scale"], settings["pressure"], settings.get("hitscan", 0.45), settings.get("pursuit", 1.0))
         match = Match(hello, arena, bot_type, seed, profile=profile, roster=roster)
         results.append(match.run(args.verbose and not results))
     print(json.dumps(dict(split=args.split if args.seed is None else "diagnostic", ffa=args.ffa,

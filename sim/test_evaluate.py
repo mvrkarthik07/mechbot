@@ -28,7 +28,7 @@ class EvaluationTest(unittest.TestCase):
         updated = {split: dict(result, points_by_seed=result["points_by_seed"].copy())
                    for split, result in outer.items()}
         updated["tuning"]["points_by_seed"][:50] = [6] * 50
-        updated["validation"]["points_by_seed"][:40] = [6] * 40
+        updated["validation"]["points_by_seed"][:60] = [6] * 60
         updated["ffa"]["points_by_seed"][:60] = [4] * 60
         self.assertTrue(evaluate.decision(outer, updated)["keep"])
         updated["ffa"]["points_by_seed"][60] = 4
@@ -52,7 +52,7 @@ class EvaluationTest(unittest.TestCase):
         self.assertEqual(evaluate.calibration_error(scores, {"v3": 3.4}), float("inf"))
 
     def test_order_and_linear_fallback(self):
-        ordered = dict(v1=3.38, v3=3.40, cand1=3.54, cand11=3.92, cand20=3.67)
+        ordered = dict(v1=3.38, v3=3.40, cand1=3.54, cand11=3.92, cand20=3.67, candB4=3.71)
         self.assertTrue(evaluate.correct_order(ordered))
         self.assertFalse(evaluate.correct_order(dict(ordered, cand20=4.2)))
         self.assertEqual(evaluate.mapped_score({}, 5), 5)

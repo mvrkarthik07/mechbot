@@ -62,3 +62,10 @@ Scores show the overall mean, paired delta, and paired lenient/strict deltas. FF
 | B10 | Keeping projectile lead during the first part of the laser charge will let the gun deal more damage before the beam can fire. | Keep gun lead until the last two charging decisions | 3.985 (-0.070, -0.03/-0.11) | — | — | — | 8.05 | Reverted |
 | B11 | A remembered mech behind cover can draw aim away from an exposed threat, giving that opponent more free shots. | Prioritize targets with a clear muzzle line | 4.250 (+0.195, +0.33/+0.06) | 4.010 (+0.060, +0.09/+0.03) | — | 3.669 | 7.99 | Reverted |
 | B12 | Retreating along a walkable lane that breaks line of sight will stop damage sooner than running straight away from the pursuer. | Choose a walkable escape lane during retreat | 4.200 (+0.145, +0.07/+0.22) | 3.975 (+0.025, -0.02/+0.07) | — | 3.658 | 7.94 | Reverted |
+
+## Coordinated-squad trials from cand11
+
+- C1. Firing a charged laser as soon as the torso will align, or releasing a lethal partial charge, will finish isolated enemies before they can answer.
+- C2. Taking a small safe detour to collect kill cubes before re-engaging will turn early kills into health, damage, and upgrades.
+- C3. Closing decisively on a wounded isolated mech while our gun or laser is ready will convert more trades into kills.
+- C4. Cover that blocks the squad centroid can leave an enemy flank open, so hold positions should block each dangerous line of fire.

@@ -1,5 +1,7 @@
 # Mech Royale evaluation
 
+**Latest real result:** `candB4` scored 3.71. Development is back on `cand11` (`b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26`), the best verified real bot at 3.92. The tables below describe the preceding benchmark and are superseded for new submission decisions. The coordinated-squad recalibration and candidate screen are running.
+
 Each row uses 200 matches per split. Practice columns show the mean followed by the lenient and strict bands.
 Free-for-all uses the validation seeds with the same fixed opponent roster for every row.
 

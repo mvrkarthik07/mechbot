@@ -18,8 +18,9 @@ REFS = dict(v1="c0a9f2e31640efbe1fe483dfa3ebb8971ff904d9",
             v3="49501d3408b991ff2f53501e28fc7e4cc6348491",
             cand1="fb04a6eb349752f1e6930da5b8d0239915f0a34d",
             cand11="b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26",
-            cand20="fe235ea72c91623e545759413d153ca889134348")
-TOLERANCE = 0.4
+            cand20="fe235ea72c91623e545759413d153ca889134348",
+            candB4="653ceb448ad9f261f3c2024cf32159a1e11ebbff")
+TOLERANCE = 0.3
 
 
 @lru_cache(maxsize=1)
@@ -42,11 +43,11 @@ def roster():
 
 
 def run_block(job):
-    spec, free_for_all, seeds, aim_scale, pressure, hitscan = job
+    spec, free_for_all, seeds, aim_scale, pressure, hitscan, pursuit = job
     hello, world = arena()
     opponents = roster() if free_for_all else ()
     bot_type = bot(spec)
-    return [sim.Match(hello, world, bot_type, seed, profile=sim.opposition(seed, aim_scale, pressure, hitscan),
+    return [sim.Match(hello, world, bot_type, seed, profile=sim.opposition(seed, aim_scale, pressure, hitscan, pursuit),
                       roster=opponents).run() for seed in seeds]
 
 
@@ -54,7 +55,7 @@ def evaluate(pool, batches, settings, *, progress=False):
     jobs = {}
     for key, (spec, free_for_all, seeds) in batches.items():
         jobs[key] = [
-            pool.submit(run_block, (spec, free_for_all, seeds[i:i + 10], settings["aim_scale"], settings["pressure"], settings.get("hitscan", 0.45)))
+            pool.submit(run_block, (spec, free_for_all, seeds[i:i + 10], settings["aim_scale"], settings["pressure"], settings.get("hitscan", 0.45), settings.get("pursuit", 1.0)))
             for i in range(0, len(seeds), 10)
         ]
     out = {}
@@ -75,7 +76,7 @@ def paired_delta(before, after, band=None):
         if band is None or sim.BANDS[seed % 2] == band)
 
 
-def decision(before, after):
+def decision(before, after, settings=None):
     if set(before) != {"tuning", "validation", "ffa"} or set(after) != set(before):
         raise ValueError("the keep gate uses tuning, validation, and validation FFA only")
     for split in before:
@@ -86,9 +87,11 @@ def decision(before, after):
     band_deltas = {split: {band: paired_delta(before[split], after[split], band) for band in sim.BANDS}
                    for split in ("tuning", "validation")}
     p99 = max(summary["act_p99_ms"] for summary in after.values())
-    keep = (delta["tuning"] > 0 and delta["validation"] >= 0.20 and delta["ffa"] >= -0.30 and p99 < 15
+    slope = (settings or {}).get("linear_fit", {}).get("a", 1.0)
+    real_gain = slope * delta["validation"]
+    keep = (delta["tuning"] > 0 and real_gain >= 0.30 - 1e-9 and delta["ffa"] >= -0.30 and p99 < 15
             and all(d >= -0.20 for bands in band_deltas.values() for d in bands.values()))
-    return dict(keep=keep, delta=delta, band_deltas=band_deltas, max_act_p99_ms=p99)
+    return dict(keep=keep, predicted_real_gain=real_gain, delta=delta, band_deltas=band_deltas, max_act_p99_ms=p99)
 
 
 def predictions(pool, scores, settings, seeds):
@@ -110,12 +113,40 @@ def save_calibration(settings):
     pending.replace(file)
 
 
-def correct_order(p):
+def ranking_loss(p):
     if not REFS.keys() <= p.keys():
-        return False
-    return (abs(p["v1"] - p["v3"]) <= 0.20
-            and max(p["v1"], p["v3"]) < p["cand1"] < p["cand11"]
-            and p["cand11"] > p["cand20"])
+        return math.inf
+    groups = (("v1", "v3"), ("cand1",), ("cand20", "candB4"), ("cand11",))
+    loss = sum(max(0, p[low] - p[high] + 0.005)
+               for lower, higher in itertools.pairwise(groups) for low in lower for high in higher)
+    return loss + sum(max(0, abs(p[a] - p[b]) - 0.245)
+                      for a, b in (groups[0], groups[2]))
+
+
+def correct_order(p):
+    return ranking_loss(p) < 1e-9
+
+
+def fit_linear(scores, predicted):
+    x, y = list(predicted.values()), [scores[name] for name in predicted]
+    a, b = statistics.linear_regression(x, y) if len(set(x)) > 1 else (0.0, statistics.mean(y))
+    # Reverse-order and negative gains are not usable as a positive calibration curve.
+    return dict(a=a, b=b)
+
+
+def model_key(scores, predicted):
+    fit = fit_linear(scores, predicted)
+    estimates = {name: fit["a"] * points + fit["b"] for name, points in predicted.items()}
+    return (fit["a"] <= 0, max(0, calibration_error(scores, estimates) - TOLERANCE),
+            ranking_loss(predicted), calibration_error(scores, predicted))
+
+
+def fitted_model(scores, trials):
+    params, predicted = min(trials, key=lambda item: model_key(scores, item[1]))
+    result = dict(**params, scores=scores, validation_predictions=predicted)
+    if not correct_order(predicted) or calibration_error(scores, predicted) > TOLERANCE + 1e-9:
+        result["linear_fit"] = fit_linear(scores, predicted)
+    return result
 
 
 def mapped_score(settings, points):
@@ -127,32 +158,26 @@ def calibrate(pool, settings, scores):
     seeds = sim.SEEDS["validation"]
     guess = {k: settings[k] for k in ("aim_scale", "pressure")}
     guess["hitscan"] = settings.get("hitscan", 0.45)
+    guess["pursuit"] = settings.get("pursuit", 1.0)
     fitted = predictions(pool, scores, guess, seeds)
     tried = [(guess, fitted)]
     print(f"Current model validation {fitted}", file=sys.stderr, flush=True)
     if calibration_error(scores, fitted) > TOLERANCE + 1e-9 or not correct_order(fitted):
         # Screen a small stratified validation subset. Only full-split results can select a model.
-        grid = [dict(aim_scale=aim, pressure=guess["pressure"], hitscan=hitscan)
-                for aim, hitscan in itertools.product((0.75, 1.0, 1.25), (0.15, 0.80))]
+        grid = [dict(aim_scale=aim, pressure=guess["pressure"], hitscan=0.80, pursuit=pursuit)
+                for aim, pursuit in itertools.product((0.75, 1.05), (0.45, 1.5))]
         pilot = []
         for g in grid:
             estimate = predictions(pool, scores, g, seeds[:24])
             pilot.append((g, estimate))
-        pilot.sort(key=lambda item: (not correct_order(item[1]), calibration_error(scores, item[1])))
+        pilot.sort(key=lambda item: model_key(scores, item[1]))
         for g, _ in pilot[:2]:
             predicted = predictions(pool, scores, g, seeds)
             tried.append((g, predicted))
             print(f"Challenger validation {g} {predicted}", file=sys.stderr, flush=True)
             if correct_order(predicted) and calibration_error(scores, predicted) <= TOLERANCE + 1e-9:
                 break
-    acceptable = [(g, p) for g, p in tried if correct_order(p) and calibration_error(scores, p) <= TOLERANCE + 1e-9]
-    if acceptable:
-        params, predicted = min(acceptable, key=lambda item: calibration_error(scores, item[1]))
-        return dict(**params, scores=scores, validation_predictions=predicted)
-    params, predicted = min(tried, key=lambda item: calibration_error(scores, item[1]))
-    x, y = list(predicted.values()), [scores[name] for name in predicted]
-    a, b = statistics.linear_regression(x, y) if len(set(x)) > 1 else (0.0, statistics.mean(y))
-    return dict(**params, scores=scores, validation_predictions=predicted, linear_fit=dict(a=a, b=b))
+    return fitted_model(scores, tried)
 
 
 def compare(pool, settings, args):
@@ -169,7 +194,7 @@ def compare(pool, settings, args):
                                   bands={band: paired_delta(before, after, band) for band in sim.BANDS},
                                   act_p99_ms=after["act_p99_ms"]), indent=2))
             return
-    result = decision(*summaries)
+    result = decision(*summaries, settings)
     result["scores"] = {stage: {label: {k: summary[k] for k in ("mean_points", "bands", "killed_by")}
                                 for label, summary in zip(("base", "candidate"), (summaries[0][stage], summaries[1][stage]))}
                         for stage in stages}
@@ -198,7 +223,7 @@ def report_text(results, settings, versions=REFS):
     for base, candidate in itertools.pairwise(REFS):
         before, after = [{split: results[name, split] for split in ("tuning", "validation", "ffa")}
                          for name in (base, candidate)]
-        gate = decision(before, after)
+        gate = decision(before, after, settings)
         d, b = gate["delta"], gate["band_deltas"]["validation"]
         lines.append(f'| `{candidate}` vs. `{base}` | {d["tuning"]:+.3f} | {d["validation"]:+.3f} | '
                      f'{b["lenient"]:+.2f} / {b["strict"]:+.2f} | {d["ffa"]:+.3f} | '
@@ -208,7 +233,7 @@ def report_text(results, settings, versions=REFS):
     if fit := settings.get("linear_fit"):
         lines.extend([f'Fallback fit: predicted real = {fit["a"]:.4f} × simulated validation + {fit["b"]:.4f}.',
                       "The map was fitted to the recorded real scores. Errors in the table are fitted residuals.", ""])
-    lines.extend([f'Raw simulated ordering matches the real ordering: {"yes" if correct_order(predicted) else "no"}.', "",
+    lines.extend([f'Raw simulated ordering matches the real ordering: {"yes" if correct_order(predicted) else "no"}. Rank loss: {ranking_loss(predicted):.3f}.', "",
                   "| Bot | Real practice | Raw sim validation | Predicted real | Absolute prediction error |",
                   "| --- | ---: | ---: | ---: | ---: |"])
     for name, real in sorted(settings["scores"].items()):

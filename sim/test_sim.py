@@ -174,7 +174,7 @@ class SimulatorTest(unittest.TestCase):
         self.assertEqual(match.observation(zone, other_bot)["events"], [])
 
     def test_bot_moves_toward_cover_when_hit_while_healing(self):
-        match = self.match()
+        match = Match(self.hello, self.arena, load_git_bot("653ceb448ad9f261f3c2024cf32159a1e11ebbff"), 0)
         match.living = match.mechs.copy()
         player = match.player
         obs = match.observation(match.zone())
@@ -190,3 +190,21 @@ class SimulatorTest(unittest.TestCase):
             self.assertEqual(match.bot.act(obs)["move"], [0, 1])
             find.assert_called_once()
             nav.assert_called_once_with(x, y, *cover, 0)
+
+    def test_squad_routes_to_remembered_contact_without_aiming_at_hidden_player(self):
+        from sim.sim import opposition
+
+        match = Match(self.hello, self.arena, Bot, 1200, profile=opposition(1200))
+        match.living = match.mechs.copy()
+        match.zone()
+        player = match.player
+        contact = player.pos
+        match.squad_contact = contact, (0, 0, 0), 0
+        player.pos = (contact[0] + 80, contact[1], contact[2])
+        with (patch.object(match, "visible", return_value=False),
+              patch.object(match, "house_attack") as attack):
+            match.squad()
+        attack.assert_not_called()
+        self.assertEqual(match.squad_contact[0], contact)
+        self.assertEqual(match.contact_stats["gap"], 1)
+        self.assertNotIn("fire", match.hunters[0].action)
