@@ -4,7 +4,7 @@ import runpy
 import unittest
 from unittest.mock import patch
 
-from sim.sim import Arena, Body, Bot, KIT, Match, cylinder_hit, load_hello
+from sim.sim import Arena, Body, Bot, KIT, Match, cylinder_hit, load_git_bot, load_hello
 
 
 class SimulatorTest(unittest.TestCase):
@@ -97,8 +97,8 @@ class SimulatorTest(unittest.TestCase):
         self.assertIsNone(laser.charge_start)
         self.assertEqual(opponent.short_until, config["short_s"])
 
-    def test_bot_dodges_incoming_round_but_ignores_outgoing_round(self):
-        match = self.match()
+    def test_historical_cand20_dodges_incoming_round_but_ignores_outgoing_round(self):
+        match = Match(self.hello, self.arena, load_git_bot("fe235ea"), 0)
         match.living = match.mechs.copy()
         p = match.player
         x, y, z = p.pos

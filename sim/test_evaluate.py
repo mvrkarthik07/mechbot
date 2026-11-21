@@ -50,3 +50,10 @@ class EvaluationTest(unittest.TestCase):
         self.assertGreater(evaluate.calibration_error(scores, {"v3": 3.4, "cand20": 5.2}), 0.4)
         self.assertLess(evaluate.calibration_error(scores, {"v3": 3.3, "cand20": 4.7}), 0.4)
         self.assertEqual(evaluate.calibration_error(scores, {"v3": 3.4}), float("inf"))
+
+    def test_order_and_linear_fallback(self):
+        ordered = dict(v1=3.38, v3=3.40, cand1=3.54, cand11=3.92, cand20=3.67)
+        self.assertTrue(evaluate.correct_order(ordered))
+        self.assertFalse(evaluate.correct_order(dict(ordered, cand20=4.2)))
+        self.assertEqual(evaluate.mapped_score({}, 5), 5)
+        self.assertEqual(evaluate.mapped_score({"linear_fit": {"a": 0.5, "b": 1}}, 5), 3.5)

@@ -54,9 +54,12 @@ class Opposition:
     per_kill: float
     all_after: float
     weapons: tuple
+    jitter: float
+    adapt: float
+    early_laser: int | None
 
 
-def opposition(seed, aim_scale=1.0, pressure=0.0):
+def opposition(seed, aim_scale=1.0, pressure=0.0, hitscan=0.45):
     """Draw matched profiles from the two halves of a difficulty distribution."""
     rng = random.Random(seed ^ 0xFACE771)
     band = BANDS[seed % 2]
@@ -76,7 +79,10 @@ def opposition(seed, aim_scale=1.0, pressure=0.0):
     all_after = draw(360, 240)
     laser_share = rng.random()
     weapons = tuple("laser" if rng.random() < laser_share else "lightning" for _ in range(7))
-    return Opposition(band, aim, lead, reaction, per_kill, all_after, weapons)
+    jitter = rng.uniform(0.25, 1.25)
+    adapt = rng.uniform(0.25, 0.8)
+    early_laser = rng.randrange(4) if rng.random() < hitscan else None
+    return Opposition(band, aim, lead, reaction, per_kill, all_after, weapons, jitter, adapt, early_laser)
 
 
 def read_calibration(path=DEFAULT_CALIBRATION):
@@ -158,6 +164,7 @@ class Body:
     last_command: float = -math.inf
     seen_at: float = -math.inf
     next_scan: float = 0.0
+    lead_sample: tuple | None = None
 
     @property
     def center(self):
@@ -362,6 +369,7 @@ class Match:
         else:
             difficulties = iter(SQUAD)
         loadouts = iter(profile.weapons if profile else ())
+        house_index = 0
         for i in range(rules["mechs"]):
             for _ in range(2400):
                 pos = arena.position(rng, rules["arena_margin"],
@@ -384,6 +392,9 @@ class Match:
                 if not self.ffa and m.difficulty in ("hard", "expert"):
                     kind = next(loadouts) if profile else rng.choice(("laser", "lightning"))
                     m.weapons[1] = self.new_weapon(kind)
+                elif not self.ffa and profile and house_index == profile.early_laser:
+                    m.weapons[1] = self.new_weapon("laser")
+                house_index += 1
             self.mechs.append(m)
         self.player = self.mechs[slot]
         self.house = [m for m in self.mechs if m.difficulty]
@@ -825,6 +836,10 @@ class Match:
             noise = math.radians(st["spread_deg"])
             yaw += self.rng.gauss(0, noise)
             pitch += self.rng.gauss(0, noise)
+        if m.difficulty and self.profile and kind in ("gun", "laser"):
+            jitter = math.radians(self.profile.jitter)
+            yaw += self.rng.gauss(0, jitter)
+            pitch += self.rng.gauss(0, jitter)
         vector = direction(yaw, pitch)
         start = self.muzzle(m, kind, vector)
         cube = self.cfg["cubes"]
@@ -1060,7 +1075,17 @@ class Match:
             laser = m.weapons[1] and m.weapons[1].kind == "laser"
             laser_ready = laser and (m.charging or m.weapons[1].ready <= self.t)
             travel = 0 if laser_ready else min(d, gun["range"]) / gun["speed"] * lead
-            target = translate(p.center, p.vel, travel)
+            influence = 1.0
+            if profile and m.id % 2 == 0:
+                prior = m.lead_sample
+                m.lead_sample = (p.id, p.vel)
+                if prior and prior[0] == p.id:
+                    # Blend between leading and shooting at the body when the target is reversing.
+                    vx, vy, _ = p.vel
+                    px, py, _ = prior[1]
+                    change = min(1.0, math.hypot(vx - px, vy - py) / p.stats["walk_speed"])
+                    influence -= profile.adapt * change
+            target = translate(p.center, p.vel, travel * influence)
             source = at_height(m.pos, m.stats["muzzle_height"])
             sigma = math.radians(aim_error)
             m.desired = (bearing(source, target) + self.rng.gauss(0, sigma),
@@ -1331,7 +1356,7 @@ def main():
     settings = read_calibration()
     results = []
     for seed in seeds:
-        profile = opposition(seed, settings["aim_scale"], settings["pressure"])
+        profile = opposition(seed, settings["aim_scale"], settings["pressure"], settings.get("hitscan", 0.45))
         match = Match(hello, arena, bot_type, seed, profile=profile, roster=roster)
         results.append(match.run(args.verbose and not results))
     print(json.dumps(dict(split=args.split if args.seed is None else "diagnostic", ffa=args.ffa,

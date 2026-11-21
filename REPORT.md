@@ -1,5 +1,10 @@
 # Mech Royale practice report
 
+## Real-score update
+
+The official scorer's best version is **`cand11`**, commit `b7bdc6bfb234d08fac7d90b4858fa2fa601f6b26`, at **3.92**. The next kept change, projectile dodging in `cand20` (`fe235ea72c91623e545759413d153ca889134348`), scored **3.67**. Exp15 and exp16 were reverted trials and have no historical tags to submit. The following benchmark is historical. The randomized rerun and calibration against all five official scores are in progress.
+
+
 **Best candidate is `cand20` (`fe235ea`) at 5.53 simulated points.** It gained 2.12 points over v3 on the tuning seeds and 1.60 on untouched seeds. The best simulated mean remains below the new 7–10 point target. The real scorer has yet to evaluate these candidates.
 
 | Bot | Commit | Tuning seeds 0–99 | Untouched seeds 100–199 | Tuning kills | Tuning mean death | Tuning `act()` p99 |

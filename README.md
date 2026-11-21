@@ -22,12 +22,12 @@ Download and unpack the official [Mech Royale kit](https://www.joinbuilders.org/
 python3 -B sim/sim.py --split tuning
 python3 -B sim/sim.py --seed 1000 --verbose
 python3 -B sim/sim.py --split validation --ffa
-python3 -B -m sim.evaluate --jobs 6 compare --base cand20 --candidate ./bot.py
+python3 -B -m sim.evaluate --jobs 6 compare --base cand11 --candidate ./bot.py
 python3 -B -m sim.evaluate --jobs 6 report
 python3 -B -m unittest sim.test_sim sim.test_evaluate
 python3 mechfight-kit/check/check.py -- python3 -u bot.py
 ```
 
-Tuning uses seeds 1000–1199, validation uses 1200–1399, and the final holdout uses 1400–1599. Each split has 100 lenient and 100 strict opponent profiles. The comparison gate requires +0.25 tuning points, +0.20 validation points, no band loss greater than 0.20 on either practice split, and no FFA loss greater than 0.30 on the validation seeds. The candidate's `act()` p99 must stay below 15 ms. The report is the only output that includes final holdout results.
+Tuning uses seeds 1000–1199, validation uses 1200–1399, and the final holdout uses 1400–1599. Each split has 100 lenient and 100 strict opponent profiles. The comparison gate screens for a positive tuning gain and requires +0.20 validation points, no band loss greater than 0.20 on either practice split, and no FFA loss greater than 0.30 on the validation seeds. The candidate's `act()` p99 must stay below 15 ms. The report is the only output that includes final holdout results.
 
 FFA uses the candidate, five pinned historical bot copies, the kit starter, and nine independent house mechs. The simulator uses ground-only motion, the bot's 2 m map, and sampled canopy and shot geometry. For actual scorer feedback, follow the [calibration procedure](sim/CALIBRATION.md).
