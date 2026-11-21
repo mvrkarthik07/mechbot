@@ -29,7 +29,7 @@ SQUAD = ("easy",) * 4 + ("medium",) * 4 + ("hard",) * 4 + ("expert",) * 3
 # House AI parameters, independent of game balance.
 HOUSE = {
     # aim error (degrees), lead fraction, reaction (s), preferred gun range
-    "easy": (3.2, 0.35, 0.55, 62),
+    "easy": (1.35, 0.35, 0.45, 62),
     "medium": (1.8, 0.65, 0.35, 75),
     "hard": (0.9, 0.85, 0.20, 90),
     "expert": (0.5, 1.0, 0.10, 105),
@@ -1137,7 +1137,7 @@ def main():
     parser.add_argument("--matches", type=int, default=len(SEEDS), choices=range(1, len(SEEDS) + 1),
                         metavar="1–100", help="run the first N fixed seeds")
     parser.add_argument("--seed", type=int, help="run one match with this seed")
-    parser.add_argument("--per-kill", type=float, default=0.65, help="additional hunters per credited kill")
+    parser.add_argument("--per-kill", type=float, default=0.85, help="additional hunters per credited kill")
     parser.add_argument("--all-after", type=float, default=240, help="send all surviving hunters at this match time")
     parser.add_argument("--verbose", action="store_true", help="print the first match as a five-second timeline")
     args = parser.parse_args()
