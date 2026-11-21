@@ -1,42 +1,36 @@
-# Randomized practice calibration
+# Coordinated-squad calibration
 
-The practice benchmark assigns 100 matches to each of two difficulty bands per split. Every seed determines its own profile independently of spawn and bot RNG. Comparing two bots on a seed gives them the same initial layout and opponent profile.
+The target uses six recorded practice scores and the fixed 200 validation seeds. Differences below 0.25 within the paired real-score groups are treated as potentially noisy.
 
-| Draw | Full range | Strict half |
-| --- | --- | --- |
-| Aim noise multiplier on each difficulty tier | 0.5–1.5 | Lower noise |
-| Lead fraction | 0.30–1.00 | More lead |
-| Reaction interval | 0.10–1.00 s | Faster reactions |
-| Additional hunters per credited kill | 0.25–1.00 | More hunters |
-| Remaining squad joins | 240–360 s | Earlier |
-| Hard and expert secondary loadout | Match-specific laser/lightning probabilities | Drawn independently of band |
-| Early hitscan variant | One randomly selected easy mech can start with a laser | Drawn independently of band |
-| Additional house shot jitter | 0.25–1.25° standard deviation per axis | Drawn independently of band |
-| Adaptive lead | Half of hunters blend their lead toward the current body position when velocity changes | Drawn independently of band |
+## Pursuit and warning time
 
-The configuration can scale the center of the aim-noise distribution and skew each continuous draw within its band without crossing its endpoints. FFA starts mechs with guns and supplies secondary weapons through pickups. The FFA squad schedule has no effect because house mechs choose their own opponents.
+The preceding policy pursued the last sighting and sometimes switched to the player's live location without a new sighting. Hunters generally reserved boosting for zone movement. The current policy shares observed position and velocity. A lead hunter presses while flankers approach from offset routes. After losing contact, they continue searching near the predicted last-known point and rotate sectors. The simulator also omits a bot's own rounds as specified in the protocol. Projectile dodging remains out of the development bot.
 
-Record each incoming real practice score with the tagged version or an immutable Git revision.
+On a 24-seed probe at aim scale 0.75, cand11's mean reacquisitions rose from 11.33 to 14.71 per match. Its mean longest contact gap stayed near 32.8 s. CandB4 moved from 0.25 above cand11 to 0.25 below it. Cand20 moved from 0.17 above cand11 to a tie. In a separate probe, shared estimates from noisy sound bearings widened cand20's advantage to 1.33, so that variant was dropped. The probes motivated the full-split tests and do not establish the real cause.
 
-```sh
-python3 -B -m sim.evaluate --jobs 6 calibrate --score cand20=REAL_SCORE
-```
+## Full-split fit
 
-The command checks all 200 randomized validation matches for v1, v3, and every recorded real-scored candidate. It keeps the current distribution when it matches the real order and every error is within ±0.40. Otherwise it screens six profiles on 24 validation seeds and confirms the two strongest on the full split. If the raw model still misses the order or tolerance, it fits the requested least-squares map from simulated validation to real scores. A positive linear map preserves simulated ranking, so any raw ordering error remains a model limitation. The holdout is reserved for the report.
+| Aim scale / pursuit | Raw rank loss | Raw cand11 | Raw candB4 | Raw cand20 |
+| --- | ---: | ---: | ---: | ---: |
+| 0.75 / 1 | 0.510 | 6.265 | 6.145 | 6.580 |
+| 0.75 / 1.5 | 0.370 | 6.530 | 6.460 | 6.800 |
+| 1.05 / 1.5 | 0.685 | 6.635 | 6.520 | 7.040 |
 
-The calibration file records the parameters, measured real scores, and matching simulated validation means. The earlier fixed-opponent calibration and its history are available at commit `7a6410d`. Ground-only motion and the approximate house tactics remain the main limits on competitive prediction.
+Selected aim scale 0.75, pursuit 1.5, pressure 2, and early laser probability 0.8.
+Predicted real = 0.4306 × raw validation + 0.8988.
+The exact raw group ordering was not reproduced. The linear fit changes score scale and leaves the order unchanged when the slope is positive.
 
-## Fit against the five official scores
+| Bot | Official | Raw validation | Fitted real | Absolute fit error |
+| --- | ---: | ---: | ---: | ---: |
+| `v1` | 3.38 | 5.770 | 3.383 | 0.003 |
+| `v3` | 3.40 | 5.955 | 3.463 | 0.063 |
+| `cand1` | 3.54 | 6.170 | 3.556 | 0.016 |
+| `cand11` | 3.92 | 6.530 | 3.711 | 0.209 |
+| `cand20` | 3.67 | 6.800 | 3.827 | 0.157 |
+| `candB4` | 3.71 | 6.460 | 3.680 | 0.030 |
 
-Selected aim scale 0.75, pressure 2, and early laser probability 0.80. The raw model still reverses cand11 and cand20.
-The fallback is **predicted real = 0.3280 × raw validation + 2.3538**.
+These are in-sample fitted errors over six versions. They do not measure the uncertainty of a new candidate or a repeat real submission.
 
-| Bot | Official | Raw validation | Predicted real | Absolute error | Leave-one-out error |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `v1` | 3.38 | 3.390 | 3.466 | 0.086 | 0.131 |
-| `v3` | 3.40 | 3.310 | 3.440 | 0.040 | 0.068 |
-| `cand1` | 3.54 | 3.615 | 3.540 | 0.000 | 0.000 |
-| `cand11` | 3.92 | 3.950 | 3.650 | 0.270 | 0.360 |
-| `cand20` | 3.67 | 4.455 | 3.815 | 0.145 | 0.647 |
+Tuning uses seeds 1000–1199 and validation 1200–1399, with 100 lenient and 100 strict profiles per split. Final holdout seeds 1400–1599 appear only in REPORT.md. FFA uses the locked historical roster with independent house actors. Each profile retains the existing randomized lead, reaction, aim noise, schedule, and weapons.
 
-The official loss for cand20 vetoes using that change as a submission, even if it passes simulator gates. Leave-one-out errors omit each version from the linear fit while retaining the selected house profile. They do not measure generalization to independent real matches.
+Record a new official result with `python3.13 -B -m sim.evaluate --jobs 9 calibrate --score TAG=POINTS`. Recheck calibration when the fitted error exceeds 0.30 or the observed ordering flips.
